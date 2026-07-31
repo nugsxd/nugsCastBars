@@ -1,0 +1,363 @@
+# nugsCastBars — changelog
+
+## 0.6.4
+
+- **Fixed: the settings window twitched the first time it was dragged.** It is
+  anchored to the centre of the screen, and StartMoving has to convert that relative
+  anchor into an absolute position before it can move anything - landing on a
+  fractional pixel. That conversion now happens once, rounded, when the window first
+  opens, so the first drag has nothing left to convert. It only ever showed up once
+  per session, which is why moving the window made it stop.
+
+## 0.6.3
+
+- **Fixed: the Saved... button threw "attempt to call a nil value" and never opened.**
+  The picker was placed near the top of the file but calls a scroll helper defined
+  hundreds of lines below it, so the call bound to a nil global. Moved below the
+  helper it depends on.
+- The picker is now **Pick a saved profile...** sitting beside a shortened name box,
+  rather than a fourth button crammed next to Save/Load/Delete.
+- **Fixed: sliders jumped when clicked.** The value box commits when it loses focus,
+  so clicking straight onto a slider re-applied whatever was still in the box over
+  the value you had just clicked. It now ignores a commit that matches the live
+  value.
+
+## 0.6.2
+
+- A **Saved...** button next to the profile buttons lists what you have saved, so a
+  name never has to be typed from memory.
+- **Fixed: a pop-up list came up empty the first time and only filled in on the
+  second click.** Its width was read from the scroll frame, which is sized by
+  anchors and so still measures zero on the frame it was created in - every row was
+  built zero-wide. The width now comes from the pop-up's own size, which is known
+  immediately.
+- Pop-up lists are lifted off the window's near-black background and edged in
+  storm-blue, so a floating list reads as sitting on top of the panel rather than
+  disappearing into it.
+
+## 0.6.1
+
+- **Fixed: the options window threw an error and the General tab came up blank.**
+  The new profile box was built by calling this file's EditBox helper with the
+  argument order used by a same-named helper in another nugs addon. It handed back a
+  plain frame, setting a text handler on it errored, and construction stopped part
+  way down the column - which is why the window opened empty on the second try
+  rather than not at all.
+
+## 0.6.0
+
+- **Profiles.** Save the current settings under a name, then load them on any other
+  character. Profiles live in the account-wide saved variables, so one made on your
+  main is visible from every alt - no strings to copy, no export and re-import.
+- Nothing auto-saves and nothing is bound to a character. A change you make simply
+  stays until you Save it into a profile or Load a different one over it.
+- **Every slider value can be typed.** The number beside each slider is now a box:
+  drag to find a value, type to repeat one you already know. Both drive the same
+  setting.
+- The boxes commit on Enter or when you click away, put the live value back if you
+  type something that is not a number rather than zeroing it, and clamp to the
+  slider's own range - so a stray extra digit cannot push a setting somewhere the
+  slider could never reach.
+- The profile section now says which profile is **loaded**, and marks it
+  |cffd8a13f(modified)|r the moment you change anything - because after that you are no
+  longer on it, and a label that just echoed the last name you clicked would be wrong
+  within seconds. Save writes your changes back; Load throws them away.
+
+## 0.5.4 — 2026-07-30
+
+**The interrupted unit's name now shows in combat.** It was silently dropping out,
+and the reason is an asymmetry worth naming: a *spell* has an id, so a plain name
+can be looked up locally from `C_Spell.GetSpellInfo` — which is why the spell has
+always shown. A *unit* has no such path, and in combat `UnitName` hands back a
+secret string. The message builder concatenates, a secret may never be joined to
+other text, so the name was being discarded.
+
+A secret can still be **drawn**, just not joined. So:
+
+- When the name survives `Plain()` — out of combat, mostly — it reads as one line,
+  exactly as before: "Kick > Chaos Bolt on Rageclaw Shaman".
+- When it does not, it goes on a **second line of its own** rather than being lost.
+  Sized to 80% of the main line and drawn straight into a FontString, which is the
+  one thing a secret value is for.
+- The unlock preview and the Test button both now show the two-line form, since
+  that is the shape it takes in an actual fight.
+
+**Chat cannot carry the secret form** — `print` has to turn its argument into a
+string, and that is precisely what a secret will not do. Chat gets the message
+without the name; the screen gets both. That one is a limit of the game rather than
+a setting, and the options window now says so.
+
+## 0.5.3 — 2026-07-30
+
+The on-screen announcement is now **its own frame** rather than a line borrowed from
+Blizzard's error area, which means it can be placed, styled and sized like
+everything else here.
+
+- **Movable.** It joins the same lock as the bars, so `/ncb unlock` puts a sample
+  message up and lets you drag it, and one command still places the whole addon.
+- **It now names your ability and what it stopped** — "Kick > Chaos Bolt on
+  Training Dummy". Which of your interrupts was used comes from watching it go off;
+  where a class has only one, there was never any ambiguity to resolve. Every part
+  is independent, and anything the client will not name plainly is left out rather
+  than guessed at.
+- **Font, outline, size, colour**, plus hold and fade times, on the General tab.
+- The fade is an animation rather than an OnUpdate, so the timing is fixed the
+  moment the message appears and there is nothing for Lua to recompute each frame.
+
+## 0.5.2 — 2026-07-30
+
+**0.5.1's announcements never fired.** 12.0 does not let an addon register
+`COMBAT_LOG_EVENT_UNFILTERED` at all — the call comes back as
+`ADDON_ACTION_FORBIDDEN` on a protected `Frame:RegisterEvent`. It does not need to.
+
+- `UNIT_SPELLCAST_INTERRUPTED` and `UNIT_SPELLCAST_CHANNEL_STOP` carry a fourth
+  argument, **`interruptedBy`** — nil when a cast merely ended, set when something
+  stopped it. Those events are unit-filtered and already registered by every bar,
+  so detection now costs nothing at all and the combat log is gone entirely.
+- Ownership is decided best-first: if `interruptedBy` survives `Plain()` it is
+  compared against your GUID, which is exact. If it is secret it can still be
+  truth-tested — proving the cast was interrupted but not by whom — and ownership
+  falls back to whether one of your own interrupts landed in the last 0.7s.
+- Target and focus are often the same mob, so one interrupt arrived as two events.
+  Announcements inside 0.3s of each other are now the same interrupt, once.
+- Your own cast being stopped can no longer be credited to you as an interrupt.
+
+**Bug this exposed:** a channel has no `INTERRUPTED` event of its own — being kicked
+arrives as a `CHANNEL_STOP` carrying `interruptedBy`. Without reading it, a kicked
+channel finished **green**, as though it had run its course. It now correctly shows
+as interrupted.
+
+## 0.5.1 — 2026-07-30
+
+**Announce your interrupts when they land.** Both off by default.
+
+- **Sound** on a successful interrupt, picked from the same media list as the fonts
+  and textures, so any LibSharedMedia sound pack shows up in it. Clicking a cue in
+  the list plays it.
+- **On-screen and/or chat message** — "Interrupted: Chaos Bolt (Training Dummy)" —
+  with a Test button next to the setting.
+- Only *your* interrupts count, your pet's included, which is what a warlock's
+  Spell Lock needs. Identified by GUID, falling back to the combat log's own
+  "mine" affiliation bit if the client will not hand the GUID over plainly.
+- Nothing secret ever reaches the message: the interrupted spell's name is resolved
+  from its id where possible (a plain id looked up locally gives a plain name back),
+  and any piece the client kept secret is left out rather than risking a
+  concatenation that would error.
+- `SPELL_INTERRUPT` from the combat log is the only thing that says an interrupt
+  actually *connected* — no unit event distinguishes "the cast stopped" from "you
+  stopped it". That event is expensive, so the frame is registered only while an
+  announcement is switched on, unregistered again when it is off, and its handler
+  drops everything that is not that one subevent before doing anything else.
+
+## 0.5.0 — 2026-07-30
+
+**Interrupt-aware colouring**, the way Plater does it: an interruptible cast is
+coloured by whether *your* interrupt is off cooldown.
+
+- Two independent toggles per bar — **interrupt ready** and **interrupt on
+  cooldown** — each with its own colour, so you can flag only the state you care
+  about and leave the other on the normal casting colour. On out of the box for
+  **Target** and **Focus**; available on **Boss** but not assumed.
+- These take **priority** over the casting and channelling colours on that bar. A
+  cast that *cannot* be interrupted keeps its own colour either way — it is never
+  claimed to be kickable.
+- The colour flips live when your kick comes off cooldown mid-cast.
+- Your interrupt is detected from your class and spellbook. `/ncb diag` prints what
+  it found and whether it is ready right now, and the General tab takes a
+  comma-separated list of spell ids to override the detection.
+
+How it works, because it looks impossible under 12.0: the question is two facts
+ANDed together — whether the cast can be interrupted, which is a **secret boolean**
+that may never be branched on, and whether your interrupt is ready, which is not
+(`C_Spell.GetSpellCooldown` returns `isActive` and `isOnGCD` flagged NeverSecret).
+The AND is never computed. An overlay is *tinted* by the plain half and *revealed*
+by the secret half via `SetAlphaFromBoolean`, inverted against the shield so it
+appears only on a cast that really can be interrupted. Nothing in Lua ever learns
+which.
+
+## 0.4.6 — 2026-07-28
+
+- A single line in the options window - "Part of the nugs suite" - shown only when
+  nugsSuite is not installed. A note, not a warning, and not a dependency: this
+  addon works exactly the same on its own, and the suite is only worth having once
+  you run more than one of them.
+
+## 0.4.5 — 2026-07-28
+
+- The minimap button no longer shows a sliver of the world between the icon and the
+  tracking border. The border's hole is slightly wider than the icon was, leaving a
+  thin see-through ring; there is now a dark disc behind the icon, and the icon
+  itself went from 19 to 21 pixels.
+
+## 0.4.4 — 2026-07-28
+
+- Registers with **nugsSuite**, the new hub addon: it can now list this addon, open
+  this window, fold this minimap button into its own, and carry these settings to
+  another character as part of one profile string.
+- The registration is a single entry written into a plain global table. nugsSuite
+  does not have to be installed for it to be harmless, and does not have to load
+  first for it to be found - so nothing here changes if you never install it.
+- The measured cast-length cache (`learned`) and the minimap button's angle are
+  marked as never exported. The first is machine-written and by far the largest
+  thing in the saved variables; the second is nobody else's business.
+
+## 0.4.3 — 2026-07-28
+
+- CurseForge project id (**1629882**) recorded in the .toc, so addon managers can
+  tie an installed copy back to the project and offer updates.
+
+## 0.4.2 — 2026-07-28
+
+- The N now sits **on** the bar rather than above it, where a spell name sits on a
+  real cast bar: left of the fill edge, with the spark clear to its right and the
+  empty track beyond. A dark halo, produced by resampling the glyph around a ring
+  of offsets, keeps it legible over the lit fill.
+- A letter big enough to span the bar was tried first and rejected: it occluded the
+  very thing the mark is of, leaving the fill visible only as stubs either side of
+  the glyph.
+
+## 0.4.1 — 2026-07-28
+
+- The icon now carries the **N**, in the same bold geometric letterform as
+  nugsCooldownPulse's `ringN`, so the two sit together in the addon list as one
+  suite. Composed as a nameplate — the letter above, its cast bar beneath — rather
+  than copying the ring, so the pair are siblings and not twins. The glyph is drawn
+  from the same stroke-to-cap ratio (0.24) as `ringN`.
+- The bar is a little taller and its rim a little stronger: at addon-list and
+  minimap sizes the unfilled half of a track that dark otherwise vanishes into the
+  backdrop.
+
+## 0.4.0 — 2026-07-28
+
+**0.3.0 was wrong.** It said timers and interruptibility on another unit's cast
+were unknowable in 12.0. They are not — ElvUI and Plater both show them, and
+reading oUF's castbar element on disk turned up a purpose-built API for exactly
+this that I had not known existed.
+
+The principle I had backwards: a secret value is not a wall, it is a *pipe*. The
+client gives you something you may not read but may hand to a widget, and the
+widget does the work.
+
+- **Real countdowns on every unit.** `UnitCastingDuration` / `UnitChannelDuration`
+  / `UnitEmpoweredChannelDuration` return a Duration object;
+  `StatusBar:SetTimerDuration(obj, interpolation, direction)` makes the bar animate
+  itself in the right direction at the right speed, and
+  `Duration:GetRemainingDuration()` feeds `FontString:SetFormattedText()` a real
+  number. Nothing passes through Lua, so nothing has to be readable. This is now
+  the primary drawing mode — `timer` — for **all** bars.
+- **Interruptibility is back.** `Texture:SetAlphaFromBoolean(secretBool, 1, 0)` is
+  the display sink for a secret boolean. The shield icon uses it directly, and the
+  "cannot be interrupted" colour is now an overlay pinned to the fill texture whose
+  alpha that same boolean sets — so the bar changes colour without any code ever
+  branching on the value.
+- **`UnitSpellTargetName` / `UnitSpellTargetClass`** replace the hand-rolled
+  `unit.."target"` snapshot: the spell's actual target, straight from the client.
+- **`barID`**, the tenth return of `UnitCastingInfo` in 12.0 (added because castID
+  went secret), is a plain cast identity and is now what two casts are compared by.
+- **Empower stage pips** are drawn from `UnitEmpoweredStagePercentages`. Which
+  stage is *currently* held is genuinely unknowable now — oUF notes Blizzard is
+  aware — so the pips mark boundaries and nothing tracks the current one.
+- Channels count down and casts count up via `StatusBarTimerDirection`, so the
+  0.3.0 caveat about channels filling instead of draining is gone.
+- The 0.3.0 paths all survive as fallbacks, in order: `timer` → `timed` →
+  `secret` → `guessed` → `unknown`. `/ncb diag` names the mode in use and reports
+  whether the client offers the timer API and secret-boolean display at all.
+- "Elapsed" and "elapsed / total" formats need a subtraction the values may refuse;
+  it is attempted and falls back to time-remaining rather than to nothing.
+
+## 0.3.0 — 2026-07-28
+
+The target bar was not missing events. It was **erroring**, 40 times, on the first
+thing it touched.
+
+Confirmed from BugSack on retail 12.0.7: for another unit's cast,
+`UnitCastingInfo` returns **every** field secret — name, icon, start, end, castID,
+`notInterruptible` and spellID. Two rules came out of it, and the whole file now
+obeys them:
+
+- A secret **string or number** may be truth-tested and handed to a display sink
+  (`SetText`, `SetTexture`). It may not be measured, concatenated, compared or
+  computed with. (`if name then` was fine; that is why the error landed further
+  down the table constructor.)
+- A secret **boolean** may not even be truth-tested — branching on it is exactly
+  the leak the system exists to prevent. That was the crash: `notInterruptible and
+  true or false`.
+
+Fixes:
+
+- Every boolean out of a unit API now goes through `Plain()`, giving a
+  true/false/**nil** tri-state where nil honestly means "not allowed to know".
+  Interruptibility on another player's cast now reads unknown rather than crashing
+  — the bar takes its normal colour and the shield stays down.
+- **New "secret" drawing mode, and it is accurate.** The client's own timestamps
+  are handed straight to `StatusBar:SetMinMaxValues`, and the bar is fed
+  `GetTime()` each frame. Nothing in Lua ever reads them, so being secret does not
+  matter and the widget does the division. This draws a *correct* bar for another
+  player's cast — no timer text, since we never learn the fraction, and channels
+  fill rather than drain. If the widget refuses the values we find out once and
+  drop back to the remembered-length or sweep modes.
+- **The spark is now pinned to the moving edge of the fill texture** instead of
+  being positioned by arithmetic, so it tracks a bar whose scale we are not
+  allowed to read.
+- Spell and target names are never measured or concatenated when secret: trimming
+  passes them through whole, and the cast target falls back to its own line with
+  `SetTextColor` instead of embedded colour codes.
+- `UnitExists` calls removed from the cast path — it returns a boolean, and
+  `UnitName`/`UnitCastingInfo` answer the same question by returning nil.
+- `/ncb diag` reports each bar's drawing mode (timed / secret / guessed / unknown),
+  whether times are readable, and interruptibility as can / cannot / unknown —
+  and prints no secret value, since `string.format` will not take one either.
+
+## 0.2.0 — 2026-07-28
+
+Chasing a report that the target bar did not appear for another player's cast.
+No cause was proven, so this build makes the bar not depend on the event stream
+being perfect, and adds the tools to prove where the fault is next time.
+
+- **Polling safety net.** Five times a second, every enabled bar checks what its
+  unit is actually casting and starts, replaces or ends its bar to match. Events
+  remain the fast path; this catches anything they miss. Demos, previews and bars
+  mid-fade are left alone.
+- **Unit-event filters are re-armed** whenever a target, focus or pet slot
+  changes, so a filter can never go stale behind a swapped unit token.
+- **`/ncb diag`** reports, per bar: enabled, whether the unit is there, whether
+  the frame is shown, its alpha, size and position, whether its events are
+  registered, and what the client says that unit is casting this instant.
+- **`/ncb debug`** logs every spellcast event as it arrives, so a missing bar can
+  be told apart from a missing event.
+- The poll only calls a vanished cast "interrupted" when it knew the length and
+  the cast stopped short of it; without that evidence it reports a finish.
+
+## 0.1.0 — 2026-07-28
+
+First build.
+
+- Bars for **player, target, focus, pet and boss1–boss5**, each with its own
+  config: texture, width, height, scale, border, spark, icon (side / crop / gap),
+  font, outline, size, spell name with alignment and trimming, timer (remaining /
+  elapsed / elapsed-total, 0–2 decimals), hold and fade times, and eight colours.
+- **Cast target display** — who the cast is aimed at, snapshotted at cast start,
+  shown inline, below the bar or to the right; class-coloured, and red when the
+  cast is on you.
+- **Uninterruptible casts** get their own bar colour and a shield icon.
+- **Latency tail** on the player bar.
+- **Empowered casts** draw a divider at each stage boundary.
+- Optional per-unit **suppression of Blizzard's own cast bars**.
+- Options window in the RaidReady / nugsCooldownPulse skin: tab per bar, two
+  columns of settings that re-flow around whatever does not apply to the bar you
+  are on, a media picker that previews fonts in their own font and bar textures as
+  actual bars, and the game's colour picker behind every swatch.
+- **Unlock mode** shows a looping demo cast on every enabled bar so you can place
+  them against something real. `/ncb test` does the same without unlocking.
+- "Use this bar's look everywhere" copies style without touching sizes or
+  positions.
+- Minimap button (left click options, right click lock/unlock), `/ncb` with
+  subcommands, and a stub in the Blizzard settings list.
+- Cast timing is laundered through `Plain()`: where the client will not hand over
+  usable start/end times, the bar times the cast itself off `GetTime()` and falls
+  back to the length it last measured for that spell, marking the timer with `?`.
+  With no measurement to fall back on it sweeps and shows no number rather than
+  inventing progress.
+- Icon generated by `..\nugsCastBars-art\icon.js` (dependency-free node renderer
+  and BLP2 writer, kept outside the addon folder so it never lands in a release
+  zip).

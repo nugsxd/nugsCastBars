@@ -1,0 +1,26 @@
+## Interface: 120007
+## Title: nugsCastBars
+## Notes: Replacement cast bars for you, your target, focus, pet and bosses.|nTexture, font, icon, timer and cast-target display are all configurable per bar.|nCreated by nugs.
+## Author: nugs
+## Version: 0.6.4
+## IconTexture: Interface\AddOns\nugsCastBars\icon
+
+# NOTE: if the addon list shows a blank icon, this BLP is not loading on your
+# client. Swap the line above back to a stock game texture and nothing else breaks:
+# ## IconTexture: Interface\Icons\spell_holy_borrowedtime
+## SavedVariables: nugsCastBarsDB
+## SavedVariablesPerCharacter: nugsCastBarsCharDB
+## X-Author: nugs
+## X-Copyright: Copyright (c) 2026 nugs. All Rights Reserved.
+## X-License: All Rights Reserved
+## X-Category: Unit Frames
+## X-Curse-Project-ID: 1629882
+
+# NOTE: bump the Interface number above to match your current retail patch if the
+# game flags this addon as "out of date". Find it with:  /run print((select(4,GetBuildInfo())))
+
+Core.lua
+Interrupts.lua
+Bars.lua
+Options.lua
+Minimap.lua
