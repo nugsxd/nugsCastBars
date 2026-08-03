@@ -502,33 +502,65 @@ local function EditBox(parent, getter, setter, placeholder)
     return holder
 end
 
--- Wheel-scrolled area: no Blizzard scroll template, just a child frame we shift
--- plus a thin position indicator on the right edge.
--- Dropdown lists close when you click away from them.
+-- Shared behaviour for every floating list and panel: closes when you click away
+-- from it, closes on Escape, and never outlives the window it belongs to.
 --
--- There is no "clicked anywhere" event, so the only way to see a click that lands
--- outside a frame is to put something under it that can be clicked. This is a full
--- screen button, shown and hidden with the list.
+-- `closeOnOutside` is false for panels that hold typed input. Dismissing a form on a
+-- stray click loses whatever was in it, which is worse than an extra click on Close.
 --
--- It deliberately swallows the click that dismisses: first click closes, second one
--- acts. Every dropdown in the game behaves that way, including Blizzard's own.
---
--- Frame levels are set on each show rather than once, because a list gets reparented
--- and re-anchored as it moves between buttons, and that rewrites its level.
-local function CloseOnOutsideClick(popup)
-    local catcher = CreateFrame("Button", nil, UIParent)
-    catcher:SetAllPoints(UIParent)
-    catcher:RegisterForClicks("AnyUp")
-    catcher:Hide()
-    catcher:SetScript("OnClick", function() popup:Hide() end)
+-- There is no "clicked anywhere" event, so the outside click is caught by a full
+-- screen button underneath the popup, shown and hidden with it. It swallows the click
+-- that dismisses - first click closes, second one acts - which is how every dropdown
+-- in the game behaves, Blizzard's included.
+local function AttachPopupBehaviour(popup, closeOnOutside)
+    local catcher
+    if closeOnOutside then
+        catcher = CreateFrame("Button", nil, UIParent)
+        catcher:SetAllPoints(UIParent)
+        catcher:RegisterForClicks("AnyUp")
+        catcher:Hide()
+        catcher:SetScript("OnClick", function() popup:Hide() end)
+    end
+
+    -- Escape closes the list rather than the window behind it. Propagation is left on
+    -- for every other key, so this never swallows movement or typing; it is turned off
+    -- only for the Escape that is actually being handled, which is what stops the same
+    -- press also reaching CloseSpecialWindows and shutting the window.
+    popup:EnableKeyboard(true)
+    popup:SetPropagateKeyboardInput(true)
+    popup:SetScript("OnKeyDown", function(self, key)
+        if key == "ESCAPE" and not InCombatLockdown() then
+            self:SetPropagateKeyboardInput(false)
+            self:Hide()
+        else
+            self:SetPropagateKeyboardInput(true)
+        end
+    end)
+
+    -- The anchor is read back from the popup's own SetPoint rather than passed in, so
+    -- this works for every caller without any of them having to remember to say who
+    -- owns them. IsVisible is false when any ancestor is hidden, which is exactly the
+    -- case being watched for.
+    local function WatchOwner(self)
+        if self.owner and not self.owner:IsVisible() then self:Hide() end
+    end
 
     popup:HookScript("OnShow", function(self)
-        catcher:SetFrameStrata(self:GetFrameStrata())
-        catcher:SetFrameLevel(110)
-        self:SetFrameLevel(120)
-        catcher:Show()
+        local _, relativeTo = self:GetPoint(1)
+        self.owner = relativeTo
+        self:SetScript("OnUpdate", WatchOwner)
+        if catcher then
+            catcher:SetFrameStrata(self:GetFrameStrata())
+            catcher:SetFrameLevel(110)
+            self:SetFrameLevel(120)
+            catcher:Show()
+        end
     end)
-    popup:HookScript("OnHide", function() catcher:Hide() end)
+    popup:HookScript("OnHide", function(self)
+        self:SetScript("OnUpdate", nil)
+        self:SetPropagateKeyboardInput(true)
+        if catcher then catcher:Hide() end
+    end)
     return popup
 end
 
@@ -712,7 +744,7 @@ local function ToggleNamePicker(parent, anchorTo, names, onPick)
         namePopup.scroll:SetPoint("TOPLEFT", 5, -5)
         namePopup.scroll:SetPoint("BOTTOMRIGHT", -5, 5)
         namePopup.rows = {}
-        CloseOnOutsideClick(namePopup)
+        AttachPopupBehaviour(namePopup, true)
     end
 
     local content = namePopup.scroll.content
@@ -1039,6 +1071,8 @@ local function ToggleAddSound(anchorTo, onClose)
             f.scroll:UpdateBar()
         end
 
+        AttachPopupBehaviour(f, false)
+
         addSoundPopup = f
     end
 
@@ -1075,7 +1109,7 @@ local function ToggleMediaPicker(kind, anchorTo, current, onPick)
         mediaPopup.scroll:SetPoint("TOPLEFT", 5, -5)
         mediaPopup.scroll:SetPoint("BOTTOMRIGHT", -5, 5)
         mediaPopup.rows = {}
-        CloseOnOutsideClick(mediaPopup)
+        AttachPopupBehaviour(mediaPopup, true)
     end
 
     mediaPopup.kind     = kind

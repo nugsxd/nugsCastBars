@@ -34,6 +34,12 @@
   attached to whichever frame its button sat in, and when that was a scrolling pane the
   list was clipped by it - a scroll frame clips its children. Lists now hang off the
   screen itself, so they overhang the window instead of being cut in half.
+- **Fixed: closing the window with Escape left an open list floating on screen.**
+  Lists hang off the screen itself now rather than off the window, which is what stops
+  a scrolling pane clipping them - and also cut the tie that used to take them down
+  with it. A list now watches the control it was opened from and closes when that goes
+  away, so it cannot outlive its window however the window was closed. Escape closes
+  the list first and the window second, which is the order people expect.
 
 ## 0.6.4
 
