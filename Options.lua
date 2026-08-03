@@ -108,10 +108,19 @@ local function Button(parent, text, w, h, onClick)
     b.text:SetPoint("CENTER")
     b.text:SetText(text)
     b.text:SetTextColor(unpack(C.text))
-    b:SetScript("OnEnter", function(self) self.bgTex:SetColorTexture(unpack(C.btnHi)) end)
+    b:SetScript("OnEnter", function(self)
+        if self:IsEnabled() then self.bgTex:SetColorTexture(unpack(C.btnHi)) end
+    end)
     b:SetScript("OnLeave", function(self) self.bgTex:SetColorTexture(unpack(C.btn)) end)
     b:SetScript("OnClick", onClick)
     b.SetLabel = function(self, t) self.text:SetText(t) end
+    -- Keeps its frame but drops to the faint colour and stops responding, so a
+    -- control that is not in play right now says so instead of lying. Matches the
+    -- helper of the same name in nugsCooldownPulse.
+    b.SetGrey = function(self, grey)
+        self.text:SetTextColor(unpack(grey and C.faint or C.text))
+        if grey then self:Disable() else self:Enable() end
+    end
     return b
 end
 
@@ -495,6 +504,34 @@ end
 
 -- Wheel-scrolled area: no Blizzard scroll template, just a child frame we shift
 -- plus a thin position indicator on the right edge.
+-- Dropdown lists close when you click away from them.
+--
+-- There is no "clicked anywhere" event, so the only way to see a click that lands
+-- outside a frame is to put something under it that can be clicked. This is a full
+-- screen button, shown and hidden with the list.
+--
+-- It deliberately swallows the click that dismisses: first click closes, second one
+-- acts. Every dropdown in the game behaves that way, including Blizzard's own.
+--
+-- Frame levels are set on each show rather than once, because a list gets reparented
+-- and re-anchored as it moves between buttons, and that rewrites its level.
+local function CloseOnOutsideClick(popup)
+    local catcher = CreateFrame("Button", nil, UIParent)
+    catcher:SetAllPoints(UIParent)
+    catcher:RegisterForClicks("AnyUp")
+    catcher:Hide()
+    catcher:SetScript("OnClick", function() popup:Hide() end)
+
+    popup:HookScript("OnShow", function(self)
+        catcher:SetFrameStrata(self:GetFrameStrata())
+        catcher:SetFrameLevel(110)
+        self:SetFrameLevel(120)
+        catcher:Show()
+    end)
+    popup:HookScript("OnHide", function() catcher:Hide() end)
+    return popup
+end
+
 local function ScrollArea(parent)
     local scroll = CreateFrame("ScrollFrame", nil, parent)
     local content = CreateFrame("Frame", nil, scroll)
@@ -502,15 +539,46 @@ local function ScrollArea(parent)
     scroll:SetScrollChild(content)
     scroll.content = content
 
-    local track = scroll:CreateTexture(nil, "ARTWORK")
+    -- Frames, not textures. The bar used to be two textures, and a texture cannot
+    -- take mouse input - so it showed you where you were and gave you no way to act
+    -- on it. On a long list that left the wheel as the only option.
+    --
+    -- BAR_W is the grab area and is wider than the 3px line you can see: a 3px
+    -- target is not something anybody can reliably hit. It overlaps the right edge of
+    -- the rows underneath, which is why it is hidden outright when everything fits -
+    -- an invisible strip that eats row clicks would be worse than no bar at all.
+    local BAR_W = 9
+
+    local bar = CreateFrame("Frame", nil, scroll)
+    bar:SetPoint("TOPRIGHT", 0, 0)
+    bar:SetPoint("BOTTOMRIGHT", 0, 0)
+    bar:SetWidth(BAR_W)
+    bar:EnableMouse(true)
+
+    local track = bar:CreateTexture(nil, "ARTWORK")
     track:SetPoint("TOPRIGHT", 0, 0)
     track:SetPoint("BOTTOMRIGHT", 0, 0)
     track:SetWidth(3)
     track:SetColorTexture(1, 1, 1, 0.05)
 
-    local thumb = scroll:CreateTexture(nil, "OVERLAY")
-    thumb:SetWidth(3)
-    thumb:SetColorTexture(unpack(C.accent))
+    local thumb = CreateFrame("Frame", nil, bar)
+    thumb:SetWidth(BAR_W)
+    thumb:EnableMouse(true)
+    local thumbTex = thumb:CreateTexture(nil, "OVERLAY")
+    thumbTex:SetPoint("TOPRIGHT", 0, 0)
+    thumbTex:SetPoint("BOTTOMRIGHT", 0, 0)
+    thumbTex:SetWidth(3)
+    thumbTex:SetColorTexture(unpack(C.accent))
+
+    local function MaxScroll()
+        return math.max(0, (content:GetHeight() or 1) - (scroll:GetHeight() or 1))
+    end
+
+    local function ScrollTo(value)
+        local maxScrol = MaxScroll()
+        scroll:SetVerticalScroll(math.max(0, math.min(maxScrol, value)))
+        scroll:UpdateBar()
+    end
 
     function scroll:UpdateBar()
         local viewH    = self:GetHeight() or 1
@@ -518,18 +586,83 @@ local function ScrollArea(parent)
         local maxScrol = math.max(0, totalH - viewH)
         if self:GetVerticalScroll() > maxScrol then self:SetVerticalScroll(maxScrol) end
         if maxScrol <= 0 then
-            track:Hide(); thumb:Hide()
+            bar:Hide()
             return
         end
-        track:Show(); thumb:Show()
+        bar:Show()
         local frac   = math.min(1, viewH / totalH)
         local thumbH = math.max(20, viewH * frac)
         local travel = viewH - thumbH
         local pos    = (self:GetVerticalScroll() / maxScrol) * travel
         thumb:SetHeight(thumbH)
         thumb:ClearAllPoints()
-        thumb:SetPoint("TOPRIGHT", self, "TOPRIGHT", 0, -pos)
+        thumb:SetPoint("TOPRIGHT", bar, "TOPRIGHT", 0, -pos)
+        -- Kept for the drag maths below, which needs the travel distance and cannot
+        -- recompute it from a frame mid-drag without fighting its own SetPoint.
+        self.thumbTravel = travel
     end
+
+    -- Cursor position comes back in screen pixels at the *root* scale, so it has to
+    -- be divided by the frame's effective scale before it can be compared with
+    -- anything measured off the frame itself. Skipping that makes dragging track the
+    -- cursor at the wrong speed on any UI scale other than 1.
+    local function CursorY()
+        local _, y = GetCursorPosition()
+        return y / (thumb:GetEffectiveScale() or 1)
+    end
+
+    local function OnDrag(self)
+        local travel = scroll.thumbTravel or 0
+        if travel <= 0 then return end
+        -- Cursor down is a decreasing y, and scrolling down is an increasing scroll
+        -- value, hence grab minus now rather than the other way round.
+        local delta = (self.grabY - CursorY()) * (MaxScroll() / travel)
+        ScrollTo(self.grabScroll + delta)
+    end
+
+    thumb:SetScript("OnMouseDown", function(self)
+        self.grabY      = CursorY()
+        self.grabScroll = scroll:GetVerticalScroll()
+        thumbTex:SetColorTexture(1, 1, 1, 0.9)
+        self:SetScript("OnUpdate", OnDrag)
+    end)
+    -- OnHide as well as OnMouseUp: releasing the button outside the frame does not
+    -- always deliver OnMouseUp, and an OnUpdate left running would drag the list
+    -- around with the cursor forever.
+    local function EndDrag(self)
+        self:SetScript("OnUpdate", nil)
+        thumbTex:SetColorTexture(unpack(C.accent))
+    end
+    thumb:SetScript("OnMouseUp", EndDrag)
+    thumb:SetScript("OnHide", EndDrag)
+
+    -- Clicking the track pages toward the click rather than jumping to it. A jump
+    -- would be a guess at where in the list that pixel means; a page is the same
+    -- thing the wheel does, only faster.
+    bar:SetScript("OnMouseDown", function(self)
+        local viewH = scroll:GetHeight() or 1
+        local top   = thumb:GetTop()
+        local bot   = thumb:GetBottom()
+        local y     = CursorY()
+        if top and bot and y <= top and y >= bot then return end   -- on the thumb
+        ScrollTo(scroll:GetVerticalScroll() + ((top and y > top) and -viewH or viewH))
+    end)
+
+-- If the content frame is still sitting at zero when the scroll frame gets its
+    -- real size, give it that size. A frame positioned by anchors measures 0 until a
+    -- layout pass has run, so a caller that sized its content from scroll:GetWidth()
+    -- on the very first call built every row zero-wide - which is the "the list is
+    -- empty until I click a second time" bug, and it has now been found three times.
+    --
+    -- Only when it is zero: several callers set a deliberate width, and clobbering
+    -- those would trade this bug for a layout one. Rows are anchored to the content's
+    -- edges, so they take the corrected width with them.
+    scroll:SetScript("OnSizeChanged", function(self)
+        if (self.content:GetWidth() or 0) <= 1 then
+            self.content:SetWidth(self:GetWidth() or 0)
+        end
+        if self.UpdateBar then self:UpdateBar() end
+    end)
 
     scroll:EnableMouseWheel(true)
     scroll:SetScript("OnMouseWheel", function(self, delta)
@@ -561,7 +694,7 @@ local function ToggleNamePicker(parent, anchorTo, names, onPick)
     end
 
     if not namePopup then
-        namePopup = CreateFrame("Frame", nil, parent)
+        namePopup = CreateFrame("Frame", nil, UIParent)
         namePopup:SetSize(200, 200)
         namePopup:SetFrameStrata("FULLSCREEN_DIALOG")
         namePopup:SetToplevel(true)
@@ -579,8 +712,8 @@ local function ToggleNamePicker(parent, anchorTo, names, onPick)
         namePopup.scroll:SetPoint("TOPLEFT", 5, -5)
         namePopup.scroll:SetPoint("BOTTOMRIGHT", -5, 5)
         namePopup.rows = {}
+        CloseOnOutsideClick(namePopup)
     end
-    namePopup:SetParent(parent)
 
     local content = namePopup.scroll.content
     content:SetWidth(namePopup:GetWidth() - 10)
@@ -698,6 +831,231 @@ end
 -- drawn in their own font, bar textures as an actual filled bar. Picking a look
 -- from a list of names alone is guesswork.
 --------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- Add your own sound
+--
+-- Paste a path, press Test, hear it, name it. The name then appears in every cue
+-- list from here on, and in the other nugs addons too.
+--
+-- Test is not decoration: the client returns nothing at all for a file it cannot
+-- find, so a path can be checked before it is kept. Without that this panel would be
+-- asking people to type an exact string and find out it was wrong by hearing silence
+-- mid-pull.
+--
+-- The edit boxes are built here rather than through the EditBox helper above: that
+-- one is bound to a getter and setter and refreshes from saved settings, and none of
+-- these three boxes is a setting.
+--
+-- Declared above ToggleMediaPicker because the picker's last row opens it. A local
+-- used above the statement that declares it binds to a nil global instead.
+--------------------------------------------------------------------------------
+local addSoundPopup
+
+local function PlainBox(parent, onChanged)
+    local eb = CreateFrame("EditBox", nil, parent)
+    eb:SetHeight(22)
+    eb:SetAutoFocus(false)
+    eb:SetFontObject("GameFontHighlightSmall")
+    eb:SetTextInsets(6, 6, 0, 0)
+    Backdrop(eb, C.input, 1)
+    eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    eb:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    if onChanged then
+        eb:SetScript("OnTextChanged", function(self, user) if user then onChanged() end end)
+    end
+    return eb
+end
+
+-- UIParent, not the frame that asked for it. A button that opens this can sit inside
+-- a ScrollFrame, and a ScrollFrame clips its children - which would cut the panel off
+-- at the pane edge instead of letting it overhang the window.
+local function ToggleAddSound(anchorTo, onClose)
+    if addSoundPopup and addSoundPopup:IsShown() then
+        addSoundPopup:Hide()
+        return
+    end
+
+    if not addSoundPopup then
+        local f = CreateFrame("Frame", nil, UIParent)
+        f:SetSize(360, 404)
+        f:SetFrameStrata("FULLSCREEN_DIALOG")
+        f:SetToplevel(true)
+        f:SetClampedToScreen(true)
+        f:EnableMouse(true)
+        Backdrop(f, C.bg, 1)
+
+        local title = Label(f, "Add your own sound", "GameFontNormal", C.accent)
+        title:SetPoint("TOPLEFT", 10, -9)
+
+        -- At the top, not tucked underneath. Everything anybody gets wrong about this
+        -- is decided before they reach the box - which folder, whether the game was
+        -- running when the file was copied in - so saying it afterwards is saying it
+        -- too late.
+        local how = Label(f,
+            "|cffffd479 1.|r With the game closed, put your |cffffffff.ogg|r or "
+            .. "|cffffffff.mp3|r inside any addon folder.\n"
+            .. "|cffffd479 2.|r Start the game and paste the path to it below. It "
+            .. "begins at |cffffffffInterface/AddOns/|r and includes every folder "
+            .. "and the file extension:\n"
+            .. "|cff8cd2ff      Interface/AddOns/EXBoss/Sound/testsplat.ogg|r\n"
+            .. "|cffffd479 3.|r Press Test. If you hear it, name it and save it.",
+            "GameFontDisableSmall", C.faint)
+        how:SetPoint("TOPLEFT", 10, -32)
+        how:SetPoint("TOPRIGHT", -10, -32)
+        how:SetJustifyV("TOP")
+        how:SetHeight(92)
+
+        local pathLabel = Label(f, "File path", "GameFontHighlightSmall", C.faint)
+        pathLabel:SetPoint("TOPLEFT", 10, -130)
+
+        -- Verification is cleared on every edit. A tick left over from the previous
+        -- path would be claiming something about a string nobody has tested.
+        local pathBox = PlainBox(f, function() f.Reset() end)
+        pathBox:SetPoint("TOPLEFT", 10, -146)
+        pathBox:SetPoint("TOPRIGHT", -10, -146)
+
+        local status = Label(f, "", "GameFontHighlightSmall", C.faint)
+        status:SetPoint("TOPLEFT", 10, -198)
+        status:SetPoint("TOPRIGHT", -10, -198)
+        status:SetJustifyV("TOP")
+        status:SetHeight(40)
+
+        local nameLabel = Label(f, "Name it", "GameFontHighlightSmall", C.faint)
+        nameLabel:SetPoint("TOPLEFT", 10, -242)
+
+        local nameBox = PlainBox(f, nil)
+        nameBox:SetPoint("TOPLEFT", 10, -258)
+        nameBox:SetPoint("TOPRIGHT", -10, -258)
+
+        local save
+        local test = Button(f, "Test", 70, 22, function()
+            local ok, why = NCB.VerifySound(pathBox:GetText())
+            f.verified = ok and (pathBox:GetText():gsub("^%s+", ""):gsub("%s+$", "")) or nil
+            status:SetText(ok and "Played. Give it a name and save it." or why)
+            status:SetTextColor(unpack(ok and C.accent or C.gold))
+            save:SetGrey(not ok)
+            if ok and (nameBox:GetText() or "") == "" then
+                -- Seeded from the filename, because that is what people were going to
+                -- type anyway.
+                nameBox:SetText(f.verified:match("([^/\\]+)%.%w+$") or "")
+            end
+        end)
+        test:SetPoint("TOPLEFT", 10, -172)
+
+        save = Button(f, "Save", 70, 22, function()
+            if not f.verified then return end
+            local ok, why = NCB.AddCustomSound(nameBox:GetText(), f.verified)
+            if not ok then
+                status:SetText(why)
+                status:SetTextColor(unpack(C.gold))
+                return
+            end
+            f.Reset()
+            pathBox:SetText("")
+            nameBox:SetText("")
+            f.RefreshOwn()
+            NCB.RefreshOptions()
+            status:SetText("Saved. It is in the cue list now.")
+            status:SetTextColor(unpack(C.accent))
+        end)
+        save:SetPoint("TOPLEFT", 10, -284)
+        save:SetGrey(true)
+
+        -- Closing goes back to the picker rather than to nothing, since the reason
+        -- anybody is here is to pick the cue they just added. Saving deliberately
+        -- does NOT: adding two sounds in a row is common and being thrown out to the
+        -- list after each one would be worse than an extra click at the end.
+        local close = Button(f, "Close", 70, 22, function()
+            f:Hide()
+            if f.onClose then f.onClose() end
+        end)
+        close:SetPoint("TOPRIGHT", -10, -284)
+
+        local ownLabel = Label(f, "Your sounds", "GameFontHighlightSmall", C.faint)
+        ownLabel:SetPoint("TOPLEFT", 10, -314)
+
+        local scroll = ScrollArea(f)
+        scroll:SetPoint("TOPLEFT", 10, -330)
+        scroll:SetPoint("BOTTOMRIGHT", -10, 28)
+        f.scroll = scroll
+        f.rows = {}
+
+        -- The one failure that looks exactly like a wrong path but is not, so it gets
+        -- said on its own rather than as a clause inside step 1.
+        local warn = Label(f,
+            "A file copied in while the game was running needs a full restart - "
+            .. "|cffffffff/reload|r is not enough.",
+            "GameFontDisableSmall", C.faint)
+        warn:SetPoint("BOTTOMLEFT", 10, 7)
+        warn:SetPoint("BOTTOMRIGHT", -10, 7)
+
+        function f.Reset()
+            f.verified = nil
+            save:SetGrey(true)
+            status:SetText("")
+        end
+
+        -- Only this addon's own entries are listed, and only they get a remove
+        -- button. Cues coming from a sibling nugs addon show in the picker but are
+        -- that addon's to delete - removing them from here would be reaching into
+        -- somebody else's saved variables.
+        function f.RefreshOwn()
+            local own = (NCB.db and NCB.db.customSounds) or {}
+            local content = f.scroll.content
+            content:SetWidth(f:GetWidth() - 20)
+
+            for i, entry in ipairs(own) do
+                local row = f.rows[i]
+                if not row then
+                    row = CreateFrame("Frame", nil, content)
+                    row:SetHeight(22)
+                    row:SetPoint("TOPLEFT", 0, -(i - 1) * 22)
+                    row:SetPoint("TOPRIGHT", 0, -(i - 1) * 22)
+                    row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                    row.label:SetPoint("LEFT", 4, 0)
+                    row.label:SetJustifyH("LEFT")
+                    row.play = Button(row, "Play", 46, 18, function()
+                        if row.path then PlaySoundFile(row.path, "Master") end
+                    end)
+                    row.play:SetPoint("RIGHT", -30, 0)
+                    row.remove = Button(row, "x", 22, 18, function()
+                        if row.name then
+                            NCB.RemoveCustomSound(row.name)
+                            f.RefreshOwn()
+                            NCB.RefreshOptions()
+                        end
+                    end)
+                    row.remove:SetPoint("RIGHT", -2, 0)
+                    f.rows[i] = row
+                end
+                row.name, row.path = entry.name, entry.path
+                row.label:SetPoint("RIGHT", row.play, "LEFT", -6, 0)
+                row.label:SetText(entry.name)
+                row:Show()
+            end
+            for i = #own + 1, #f.rows do f.rows[i]:Hide() end
+
+            content:SetHeight(math.max(1, #own * 22))
+            f.scroll:UpdateBar()
+        end
+
+        addSoundPopup = f
+    end
+
+    addSoundPopup.onClose = onClose
+    addSoundPopup.Reset()
+    addSoundPopup.RefreshOwn()
+
+    addSoundPopup:ClearAllPoints()
+    local below = (anchorTo:GetBottom() or 0) - addSoundPopup:GetHeight()
+    if below < 20 then
+        addSoundPopup:SetPoint("BOTTOMLEFT", anchorTo, "TOPLEFT", 0, 2)
+    else
+        addSoundPopup:SetPoint("TOPLEFT", anchorTo, "BOTTOMLEFT", 0, -2)
+    end
+    addSoundPopup:Show()
+end
+
 local mediaPopup
 
 local function ToggleMediaPicker(kind, anchorTo, current, onPick)
@@ -717,6 +1075,7 @@ local function ToggleMediaPicker(kind, anchorTo, current, onPick)
         mediaPopup.scroll:SetPoint("TOPLEFT", 5, -5)
         mediaPopup.scroll:SetPoint("BOTTOMRIGHT", -5, 5)
         mediaPopup.rows = {}
+        CloseOnOutsideClick(mediaPopup)
     end
 
     mediaPopup.kind     = kind
@@ -725,8 +1084,24 @@ local function ToggleMediaPicker(kind, anchorTo, current, onPick)
     local entries = (kind == "font") and NCB.FontList()
                     or (kind == "sound") and NCB.SoundList()
                     or NCB.TextureList()
+    if kind == "sound" then
+        -- First, not last. With a LibSharedMedia pack loaded this list runs to
+        -- dozens, and anything at the bottom of it is found by scrolling or not at
+        -- all. NCB.SoundList already puts the player's own cues ahead of the stock
+        -- ones for the same reason.
+        --
+        -- Only sounds get this: a font or a bar texture cannot be verified the way a
+        -- sound can, since nothing equivalent to PlaySoundFile returning nothing for
+        -- a missing file exists for them.
+        table.insert(entries, 1, { addRow = true, name = "|cff59b8ff+ Add your own sound file...|r" })
+    end
     local content = mediaPopup.scroll.content
-    content:SetWidth(mediaPopup.scroll:GetWidth())
+    -- Width from the popup's own SetSize, NOT from scroll:GetWidth(). The scroll is
+    -- positioned by anchors, so on the very first call - the frame having been created
+    -- microseconds earlier with no layout pass yet - it measures 0, every row is built
+    -- zero-wide, and the list looks empty until you click a second time. The same bug
+    -- was fixed in the other pickers and this one was missed.
+    content:SetWidth(mediaPopup:GetWidth() - 10)
 
     for index, entry in ipairs(entries) do
         local row = mediaPopup.rows[index]
@@ -780,9 +1155,18 @@ local function ToggleMediaPicker(kind, anchorTo, current, onPick)
             row.label:SetPoint("RIGHT", -6, 0)
         end
 
-        row.selected = (entry.name == current)
+        row.selected = (not entry.addRow) and (entry.name == current)
         row.stripe:SetColorTexture(1, 1, 1, row.selected and 0.10 or 0)
         row:SetScript("OnClick", function()
+            if entry.addRow then
+                -- Anchored to the button that opened the picker, not to the row, so
+                -- the panel does not land wherever the list happened to be scrolled.
+                mediaPopup:Hide()
+                ToggleAddSound(anchorTo, function()
+                    ToggleMediaPicker(kind, anchorTo, current, onPick)
+                end)
+                return
+            end
             onPick(entry.name)
             if kind == "sound" then NCB.PlayCue(entry.name) end
             mediaPopup:Hide()

@@ -161,9 +161,145 @@ local STOCK_SOUNDS = {
     { name = "Level Up",     id = SK.LEVEL_UP               or 888   },
 }
 
+--------------------------------------------------------------------------------
+-- Custom sounds
+--
+-- The WoW Lua sandbox has no filesystem API - no directory listing, no existence
+-- check, nothing. An addon therefore cannot notice that a player dropped an .ogg
+-- into a folder, and no amount of UI changes that. It is also why a LibSharedMedia
+-- pack is Lua code: the Register call IS the discovery.
+--
+-- What the client will do is play any file you name outright, and tell you whether
+-- it worked. Measured on 12.0.7:
+--
+--   PlaySoundFile("Interface/AddOns/EXBoss/Sound/testsplat.ogg", "Master")
+--       -> true, 4856          a real file
+--       -> (nothing at all)    a missing one - zero return values, not false
+--
+-- So a typed path can be verified, which is the whole reason this feature is worth
+-- having. The player pastes a path, hears it, names it, and the name joins the list
+-- below like any other cue.
+--------------------------------------------------------------------------------
+
+-- A falsy return from PlaySoundFile means "did not play", which is NOT the same as
+-- "file is missing" - a muted client may well produce the same answer. Reading the
+-- two CVars first means the message is right either way, and means we never have to
+-- know which of the two cases a nil actually was.
+function NCB.VerifySound(path)
+    path = tostring(path or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if path == "" then return false, "Paste the path to an .ogg or .mp3 file." end
+
+    if (GetCVar("Sound_EnableAllSound") or "1") == "0" then
+        return false, "Your game sound is turned off, so nothing can be tested yet."
+    end
+    if (tonumber(GetCVar("Sound_MasterVolume")) or 1) <= 0 then
+        return false, "Master volume is at zero, so nothing can be tested yet."
+    end
+
+    local ok = PlaySoundFile(path, "Master")
+    if ok then return true, path end
+    return false, "No file there. Check the folder name, every subfolder, and that "
+        .. "the path ends in .ogg or .mp3. A file added while the game was running "
+        .. "needs a full restart, not a /reload."
+end
+
+-- Every nugs addon writes its own library into the shared registry, so a cue added
+-- in one shows up in the others. The registry is a plain global that each addon
+-- creates for itself, so this works with nugsSuite absent - it is not the suite.
+--
+-- Deduped by path rather than by name: the same file added on two addons under two
+-- names is one sound, and showing it twice is just noise.
+function NCB.CustomSoundList()
+    local list, seenPath = {}, {}
+
+    local function take(entries)
+        -- Either shape is accepted: a plain list, or a function returning one. The
+        -- nugs addons publish the function form, since the table they would otherwise
+        -- hand over is replaced wholesale by a profile import.
+        if type(entries) == "function" then
+            local ok, resolved = pcall(entries)
+            entries = ok and resolved or nil
+        end
+        if type(entries) ~= "table" then return end
+        for _, e in ipairs(entries) do
+            if type(e) == "table" and type(e.name) == "string"
+               and type(e.path) == "string" and e.path ~= "" and not seenPath[e.path] then
+                seenPath[e.path] = true
+                list[#list + 1] = { name = e.name, path = e.path }
+            end
+        end
+    end
+
+    take(NCB.db and NCB.db.customSounds)
+    local reg = _G.nugsSuiteRegistry
+    if type(reg) == "table" then
+        for name, entry in pairs(reg) do
+            if name ~= ADDON_NAME and type(entry) == "table" then take(entry.sounds) end
+        end
+    end
+    return list
+end
+
+function NCB.AddCustomSound(name, path)
+    name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if name == "" then return false, "Give it a name." end
+
+    local db = NCB.db
+    db.customSounds = db.customSounds or {}
+    for _, e in ipairs(db.customSounds) do
+        if e.name == name then return false, "You already have a cue called that." end
+    end
+    -- Stock and LibSharedMedia names are matched by name in PlayCue, so a custom cue
+    -- sharing one would shadow it and be unselectable.
+    for _, e in ipairs(MediaList(STOCK_SOUNDS, "sound")) do
+        if e.name == name then return false, "That name is already taken by a cue in the list." end
+    end
+
+    db.customSounds[#db.customSounds + 1] = { name = name, path = path }
+    return true
+end
+
+function NCB.RemoveCustomSound(name)
+    local db = NCB.db
+    for i, e in ipairs(db.customSounds or {}) do
+        if e.name == name then
+            table.remove(db.customSounds, i)
+            -- A setting pointing at the cue that just went away would fail silently
+            -- on the next interrupt, which is the worst way to find out.
+            if db.interruptSoundName == name then
+                db.interruptSoundName = NCB.defaults.interruptSoundName
+            end
+            return true
+        end
+    end
+    return false
+end
+
 function NCB.TextureList() return MediaList(STOCK_TEXTURES, "statusbar") end
 function NCB.FontList()    return MediaList(STOCK_FONTS,    "font")      end
-function NCB.SoundList()   return MediaList(STOCK_SOUNDS,   "sound")     end
+
+-- The player's own first, then stock, then LibSharedMedia.
+--
+-- Own-first because a list that starts with a dozen cues somebody else chose buries
+-- the one they added thirty seconds ago, and a long LSM pack pushes it off the
+-- bottom entirely. What you put there yourself is what you are looking for.
+--
+-- Custom entries are {name, path}, exactly the shape LSM entries already have, so
+-- NCB.PlayCue needs no new branch.
+function NCB.SoundList()
+    local list, seen = {}, {}
+    for _, e in ipairs(NCB.CustomSoundList()) do
+        list[#list + 1] = e
+        seen[e.name] = true
+    end
+    for _, e in ipairs(MediaList(STOCK_SOUNDS, "sound")) do
+        if not seen[e.name] then
+            list[#list + 1] = e
+            seen[e.name] = true
+        end
+    end
+    return list
+end
 
 -- "Master" on purpose: on any other channel the cue goes silent for anyone who has
 -- turned sound effects down, which is most of the people who want a cue at all.
@@ -311,6 +447,10 @@ NCB.defaults = {
     interruptAnnounce  = "off",     -- off | chat | screen | both
     interruptSound     = false,
     interruptSoundName = "Raid Warning",
+    -- Sound files the player pointed us at themselves: { name = , path = }.
+    -- Account wide, so a cue added on one character is there on all of them. See
+    -- the Custom sounds section above CustomSoundList for why this exists at all.
+    customSounds       = {},
     -- The on-screen announcement is its own movable frame rather than a borrowed
     -- Blizzard one, so it can be placed, styled and sized like everything else here.
     announcePoint      = "CENTER",
@@ -552,6 +692,11 @@ local function RegisterWithSuite()
         end,
         GetDB      = function() return nugsCastBarsDB, EffectiveDefaults() end,
         GetCharDB  = function() return nugsCastBarsCharDB, NCB.charDefaults end,
+        -- Published so the other nugs addons can offer the same cues. A function
+        -- rather than the table itself: this runs before the saved variables exist,
+        -- and a profile import replaces db.customSounds outright, either of which
+        -- would leave a captured reference pointing at the wrong table forever.
+        sounds     = function() return NCB.db and NCB.db.customSounds end,
         -- Where this button sits is nobody else's business, and `learned` is a
         -- measured cast-length cache - machine written, per character, and the
         -- largest thing in the saved variables. Neither belongs in a shared profile.
