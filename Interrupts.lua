@@ -28,7 +28,7 @@ local Plain = NCB.Plain
 -- Class table
 -- Every id is checked against the spellbook before it is used, so one that is
 -- wrong or has been retired drops out of the list rather than sitting there
--- reporting a cooldown that never moves. `/ncb diag` prints what survived, which
+-- reporting a cooldown that never moves. `/ncast diag` prints what survived, which
 -- is how you find out this table has gone stale - and the override box in the
 -- options window is how you fix it without waiting for me.
 --------------------------------------------------------------------------------
@@ -259,7 +259,7 @@ end
 -- The on-screen announcement
 -- Its own frame rather than a borrowed Blizzard one, so it can be dragged, styled
 -- and sized like every other part of this addon. It joins the same lock as the
--- bars: /ncb unlock puts a sample message up and lets you move it.
+-- bars: /ncast unlock puts a sample message up and lets you move it.
 --------------------------------------------------------------------------------
 local display
 

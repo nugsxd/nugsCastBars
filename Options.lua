@@ -1104,6 +1104,7 @@ local function ToggleMediaPicker(kind, anchorTo, current, onPick)
         mediaPopup:SetSize(250, 300)
         mediaPopup:SetFrameStrata("FULLSCREEN_DIALOG")
         mediaPopup:EnableMouse(true)
+        mediaPopup:SetClampedToScreen(true)
         Backdrop(mediaPopup, C.bg, 1)
         mediaPopup.scroll = ScrollArea(mediaPopup)
         mediaPopup.scroll:SetPoint("TOPLEFT", 5, -5)
@@ -1215,7 +1216,14 @@ local function ToggleMediaPicker(kind, anchorTo, current, onPick)
     mediaPopup.scroll:UpdateBar()
 
     mediaPopup:ClearAllPoints()
-    mediaPopup:SetPoint("TOPLEFT", anchorTo, "BOTTOMLEFT", 0, -2)
+    -- Drop down if there is room, otherwise open upwards. Clamping alone would slide
+    -- the list over the button that opened it, which hides the thing being changed.
+    local below = (anchorTo:GetBottom() or 0) - mediaPopup:GetHeight()
+    if below < 20 then
+        mediaPopup:SetPoint("BOTTOMLEFT", anchorTo, "TOPLEFT", 0, 2)
+    else
+        mediaPopup:SetPoint("TOPLEFT", anchorTo, "BOTTOMLEFT", 0, -2)
+    end
     mediaPopup:Show()
 end
 
@@ -1376,7 +1384,7 @@ local function BuildBarPanel(content)
 
     L:Header("Position")
     local dragBtn = Button(content, "", 100, 22, function()
-        NCB.Bars:SetLocked(not NCB.db.locked)
+        NCB.Bars:ToggleLock(not NCB.db.locked)
     end)
     dragBtn.Refresh = function()
         dragBtn:SetLabel(NCB.db.locked and "Unlock bars for dragging" or "Lock bars in place")
@@ -1614,7 +1622,7 @@ local function BuildGeneralPanel(content)
     G:Header("Your interrupt")
     G:Hint("Colouring a cast by whether you can kick it needs to know which spell\n" ..
            "your interrupt is. That is worked out from your class and spellbook, and\n" ..
-           "only needs setting here if it got it wrong - |cffffd479/ncb diag|r prints what it found.")
+           "only needs setting here if it got it wrong - |cffffd479/ncast diag|r prints what it found.")
     G:Add(EditBox(content,
         function() return NCB.db.interruptSpells end,
         function(v)
@@ -1675,7 +1683,7 @@ local function BuildGeneralPanel(content)
            "In combat the client hands a unit's name over in a form that can be drawn\n" ..
            "but not joined to other text, so it appears on a second line. Chat cannot\n" ..
            "carry it at all - that one is a limit of the game, not a setting.", onScreen)
-    G:Hint("Drag it with |cffffd479/ncb unlock|r, same as the bars.", onScreen)
+    G:Hint("Drag it with |cffffd479/ncast unlock|r, same as the bars.", onScreen)
 
     G:Add(MediaButton(content, "font", "Message font",
         function() return NCB.db.announceFont end,
@@ -1697,7 +1705,7 @@ local function BuildGeneralPanel(content)
 
     G:Header("Placing the bars")
     local lockBtn = Button(content, "", 200, 22, function()
-        NCB.Bars:SetLocked(not NCB.db.locked)
+        NCB.Bars:ToggleLock(not NCB.db.locked)
     end)
     lockBtn.Refresh = function()
         lockBtn:SetLabel(NCB.db.locked and "Unlock bars for dragging" or "Lock bars in place")
@@ -1730,11 +1738,11 @@ local function BuildGeneralPanel(content)
     end), 26)
 
     G:Header("Commands")
-    G:Hint("|cffffd479/ncb|r opens this window\n" ..
-           "|cffffd479/ncb unlock|r and |cffffd479/ncb lock|r place the bars\n" ..
-           "|cffffd479/ncb test|r runs a demo cast\n" ..
-           "|cffffd479/ncb reset <bar|all>|r starts that bar over\n" ..
-           "|cffffd479/ncb on|r and |cffffd479/ncb off|r are the master switch")
+    G:Hint("|cffffd479/ncast|r opens this window\n" ..
+           "|cffffd479/ncast unlock|r and |cffffd479/ncast lock|r place the bars\n" ..
+           "|cffffd479/ncast test|r runs a demo cast\n" ..
+           "|cffffd479/ncast reset <bar|all>|r starts that bar over\n" ..
+           "|cffffd479/ncast on|r and |cffffd479/ncast off|r are the master switch")
 end
 
 --------------------------------------------------------------------------------
@@ -1800,7 +1808,7 @@ local function BuildWindow()
 
     -- Bottom bar ---------------------------------------------------------------
     unlockBtn = Button(f, "", 128, 22, function()
-        NCB.Bars:SetLocked(not NCB.db.locked)
+        NCB.Bars:ToggleLock(not NCB.db.locked)
     end)
     unlockBtn:SetPoint("BOTTOMLEFT", 10, 12)
 
@@ -1825,7 +1833,7 @@ local function BuildWindow()
     end)
     copyBtn:SetPoint("LEFT", resetBtn, "RIGHT", 6, 0)
 
-    local hint = Label(f, "|cff8cd2ff/ncb|r for commands", "GameFontDisableSmall", C.faint)
+    local hint = Label(f, "|cff8cd2ff/ncast|r for commands", "GameFontDisableSmall", C.faint)
     hint:SetPoint("BOTTOMRIGHT", -12, 18)
     hint:SetJustifyH("RIGHT")
 
@@ -1838,7 +1846,7 @@ local function BuildWindow()
 
     SelectTab("player")
 
-    -- CreateFrame hands back a *shown* frame, so without this the first /ncb would
+    -- CreateFrame hands back a *shown* frame, so without this the first /ncast would
     -- toggle the brand new window straight back off.
     f:Hide()
 end
@@ -1878,8 +1886,154 @@ function NCB.RefreshOptions()
     RelayoutAll()
 end
 
+--------------------------------------------------------------------------------
+-- Move bar
+--
+-- Placing things means dragging boxes that the settings window is usually sitting on
+-- top of, so the window had to be shoved aside first and dragged back after. The
+-- window gets out of the way on its own now: unlocking hides it and puts up a small
+-- bar instead, and locking brings it back exactly where it was.
+--
+-- It is deliberately not a saved position. It moves if it is in the way, and starts
+-- near the top of the screen next time; persisting it would mean a new saved
+-- variable, and a setting nobody would ever go looking for.
+--------------------------------------------------------------------------------
+local moveBar
+
+local function BuildMoveBar()
+    local f = CreateFrame("Frame", "nugsCastBarsMoveBar", UIParent)
+    f:SetSize(238, 78)
+    f:SetPoint("TOP", UIParent, "TOP", 0, -60)
+    f:SetFrameStrata("DIALOG")
+    f:SetClampedToScreen(true)
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    Backdrop(f, C.bg, 1)
+
+    -- Storm-blue edge, so a floating bar reads as sitting on top of the world rather
+    -- than being part of it. nugsCooldownPulse gets the same from its PopupChrome
+    -- helper; this file has no such helper, so it is drawn here.
+    for _, p in ipairs({ { "TOPLEFT", "TOPRIGHT", "h" }, { "BOTTOMLEFT", "BOTTOMRIGHT", "h" },
+                         { "TOPLEFT", "BOTTOMLEFT", "v" }, { "TOPRIGHT", "BOTTOMRIGHT", "v" } }) do
+        local edge = f:CreateTexture(nil, "OVERLAY")
+        edge:SetPoint(p[1]); edge:SetPoint(p[2])
+        if p[3] == "h" then edge:SetHeight(1) else edge:SetWidth(1) end
+        edge:SetColorTexture(0.35, 0.72, 1.00, 0.55)
+    end
+
+    local title = Label(f, "Placing your cast bars", "GameFontNormal", C.accent)
+    title:SetPoint("TOPLEFT", 10, -9)
+
+    local hint = Label(f, "Drag each bar to where you want it.", "GameFontDisableSmall", C.faint)
+    hint:SetPoint("TOPLEFT", 10, -28)
+
+    -- Lock is the way out of this state, so it is first and it is the wide one.
+    local lockBtn = Button(f, "Lock bars", 110, 22, function()
+        NCB.Bars:ToggleLock(true)
+    end)
+    lockBtn:SetPoint("BOTTOMLEFT", 10, 10)
+
+    local extra0 = Button(f, "Demo cast", 92, 22, function()
+        NCB.Bars:TestAll()
+    end)
+    extra0:SetPoint("LEFT", lockBtn, "RIGHT", 6, 0)
+
+    -- Escape locks rather than just dismissing the bar. Hiding it while things were
+    -- still unlocked would leave the state with nothing on screen to end it.
+    f:EnableKeyboard(true)
+    f:SetPropagateKeyboardInput(true)
+    f:SetScript("OnKeyDown", function(self, key)
+        if key == "ESCAPE" and not InCombatLockdown() then
+            self:SetPropagateKeyboardInput(false)
+            NCB.Bars:ToggleLock(true)
+        else
+            self:SetPropagateKeyboardInput(true)
+        end
+    end)
+
+    return f
+end
+
+-- Whether the settings window was open when things were unlocked, so locking can put
+-- it back only if it was there to begin with. Unlocking from the slash command with
+-- nothing open should not conjure a window on lock.
+local windowWasOpen = false
+
+function NCB.OnLockChanged(locked)
+    if not locked then
+        if window and window:IsShown() then
+            windowWasOpen = true
+            window:Hide()
+        end
+        moveBar = moveBar or BuildMoveBar()
+        moveBar:SetPropagateKeyboardInput(true)
+        moveBar:Show()
+    else
+        if moveBar then moveBar:Hide() end
+        if windowWasOpen then
+            windowWasOpen = false
+            if window then window:Show() end
+        end
+    end
+end
+
+-- Builds the window once and hooks it once. Hooked here rather than inside
+-- BuildWindow because moveBar is declared in this block: a closure written above its
+-- declaration would bind to a nil global instead, silently, until somebody clicked.
+--
+-- The two hooks keep the pair consistent whichever one the player acts on. Opening
+-- settings while unlocked should not leave two lock buttons on screen, and closing
+-- settings while unlocked should put the bar back rather than leaving the state with
+-- no way out of it.
+local function EnsureWindow()
+    if window then return end
+    BuildWindow()
+    window:HookScript("OnShow", function()
+        if moveBar then moveBar:Hide() end
+    end)
+    window:HookScript("OnHide", function()
+        if not NCB.db.locked then NCB.OnLockChanged(false) end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- Combat
+--
+-- The settings window closes and the anchor locks the moment a fight starts.
+--
+-- Not because anything here would be blocked: none of these windows touch a secure
+-- frame, so nothing throws "action blocked" the way an addon driving action bars
+-- does. The reason is that both states put FAKE data on screen - an unlocked anchor fills every bar with a preview cast - and
+-- sample data during a real pull is worse than none, because it cannot be told apart
+-- from the real thing.
+--
+-- Nothing reopens when combat drops. A window appearing by itself while you are
+-- looting is worse than pressing a button.
+--------------------------------------------------------------------------------
+local combatWatch = CreateFrame("Frame")
+combatWatch:RegisterEvent("PLAYER_REGEN_DISABLED")
+combatWatch:SetScript("OnEvent", function()
+    if NCB.db and not NCB.db.locked then
+        -- SetLocked and OnLockChanged directly rather than ToggleLock: ToggleLock
+        -- prints, and a line of chat on every pull is noise.
+        --
+        -- Clearing windowWasOpen FIRST is the part that matters. OnLockChanged puts
+        -- the settings window back when it was open before the unlock, and doing that
+        -- as a fight starts is precisely the wrong moment - it would read as a window
+        -- popping open on every pull.
+        windowWasOpen = false
+        NCB.Bars:SetLocked(true)
+        NCB.OnLockChanged(true)
+        if NCB.RefreshOptions then NCB.RefreshOptions() end
+    end
+    if window and window:IsShown() then window:Hide() end
+end)
+
 function NCB.ToggleOptions()
-    if not window then BuildWindow() end
+    EnsureWindow()
     if window:IsShown() then
         window:Hide()
     else
@@ -1906,7 +2060,7 @@ function NCB.InitOptions()
     note:SetPoint("RIGHT", panel, "RIGHT", -16, 0)
     note:SetJustifyH("LEFT")
     note:SetText("Cast bars for you, your target, your focus, your pet and bosses." ..
-        "\n\nAll settings live in the nugsCastBars window - open it with the button below or with |cffffd479/ncb|r.")
+        "\n\nAll settings live in the nugsCastBars window - open it with the button below or with |cffffd479/ncast|r.")
 
     local open = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     open:SetSize(220, 24)
@@ -1914,7 +2068,7 @@ function NCB.InitOptions()
     open:SetText("Open nugsCastBars options")
     open:SetScript("OnClick", function()
         if SettingsPanel and SettingsPanel:IsShown() then HideUIPanel(SettingsPanel) end
-        if not window then BuildWindow() end
+        EnsureWindow()
         window:Show()
     end)
 

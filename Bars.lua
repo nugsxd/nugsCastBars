@@ -920,7 +920,7 @@ function NCB.Diagnostics()
     print("  |cffaaaaaadrawing modes: timer|r = client-driven bar and countdown, " ..
           "|cffaaaaaatimed|r = our own maths, |cffaaaaaasecret|r = accurate bar but no " ..
           "numbers, |cffaaaaaaguessed|r = remembered length, |cffaaaaaaunknown|r = sweep.")
-    print("  |cffaaaaaa/ncb debug|r logs every spellcast event as it arrives.")
+    print("  |cffaaaaaa/ncast debug|r logs every spellcast event as it arrives.")
 end
 
 --------------------------------------------------------------------------------
@@ -1319,6 +1319,22 @@ function Bars:SetLocked(locked)
         self:ShowPreviews()
     end
     if NCB.RefreshOptions then NCB.RefreshOptions() end
+end
+
+-- The deliberate act, as opposed to SetLocked which ApplySettings calls on every
+-- change to re-assert the current state. Everything chatty, and everything that
+-- rearranges windows, belongs here so that neither happens on a slider tick.
+function Bars:ToggleLock(locked)
+    self:SetLocked(locked)
+    if locked then
+        NCB.Print("bars locked.")
+    else
+        NCB.Print("bars unlocked - drag them where you want them, then |cffffd479/ncast lock|r.")
+    end
+    -- The options window gets out of the way while you are placing things, and a
+    -- small bar takes its place. Options.lua owns that; guarded because that file is
+    -- only loaded on demand.
+    if NCB.OnLockChanged then NCB.OnLockChanged(NCB.db.locked) end
 end
 
 --------------------------------------------------------------------------------

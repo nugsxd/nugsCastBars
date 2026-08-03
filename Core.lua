@@ -684,7 +684,7 @@ local function RegisterWithSuite()
         title      = "nugsCastBars",
         version    = NCB.version,
         icon       = "Interface\\AddOns\\nugsCastBars\\icon",
-        slash      = "/ncb",
+        slash      = "/ncast",
         Open       = function() NCB.ToggleOptions() end,
         SetMinimap = function(shown)
             NCB.db.minimapHidden = not shown
@@ -734,17 +734,17 @@ end)
 --------------------------------------------------------------------------------
 local function Usage()
     NCB.Print("v" .. NCB.version .. " commands:")
-    print("  |cffffd479/ncb|r - open the options window")
-    print("  |cffffd479/ncb unlock|r / |cffffd479/ncb lock|r - drag the bars into place")
-    print("  |cffffd479/ncb test|r - run a demo cast on every enabled bar")
-    print("  |cffffd479/ncb on|r / |cffffd479/ncb off|r - master switch")
-    print("  |cffffd479/ncb reset <player|target|focus|pet|boss|all>|r")
-    print("  |cffffd479/ncb minimap|r - show or hide the minimap button")
-    print("  |cffffd479/ncb diag|r - report what the addon sees on every bar")
-    print("  |cffffd479/ncb debug|r - log every spellcast event as it arrives")
+    print("  |cffffd479/ncast|r - open the options window")
+    print("  |cffffd479/ncast unlock|r / |cffffd479/ncast lock|r - drag the bars into place")
+    print("  |cffffd479/ncast test|r - run a demo cast on every enabled bar")
+    print("  |cffffd479/ncast on|r / |cffffd479/ncast off|r - master switch")
+    print("  |cffffd479/ncast reset <player|target|focus|pet|boss|all>|r")
+    print("  |cffffd479/ncast minimap|r - show or hide the minimap button")
+    print("  |cffffd479/ncast diag|r - report what the addon sees on every bar")
+    print("  |cffffd479/ncast debug|r - log every spellcast event as it arrives")
 end
 
-SLASH_NUGSCASTBARS1 = "/ncb"
+SLASH_NUGSCASTBARS1 = "/ncast"
 SLASH_NUGSCASTBARS2 = "/nugscastbars"
 SlashCmdList["NUGSCASTBARS"] = function(msg)
     local db = NCB.db
@@ -764,12 +764,10 @@ SlashCmdList["NUGSCASTBARS"] = function(msg)
         NCB.Print("bars " .. (db.enabled and "enabled" or "disabled") .. ".")
 
     elseif cmd == "unlock" then
-        NCB.Bars:SetLocked(false)
-        NCB.Print("bars unlocked - drag them where you want them, then |cffffd479/ncb lock|r.")
+        NCB.Bars:ToggleLock(false)
 
     elseif cmd == "lock" then
-        NCB.Bars:SetLocked(true)
-        NCB.Print("bars locked.")
+        NCB.Bars:ToggleLock(true)
 
     elseif cmd == "test" then
         NCB.Bars:TestAll()
@@ -795,7 +793,7 @@ SlashCmdList["NUGSCASTBARS"] = function(msg)
             NCB.ResetBar(rest)
             NCB.Print(rest .. " bar reset to defaults.")
         else
-            NCB.Print("usage: /ncb reset <player|target|focus|pet|boss|all>")
+            NCB.Print("usage: /ncast reset <player|target|focus|pet|boss|all>")
         end
 
     else

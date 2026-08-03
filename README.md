@@ -3,7 +3,7 @@
 Cast bars for **you, your target, your focus, your pet and up to five bosses** —
 one addon, one look, and the same controls on every bar.
 
-Retail only (Interface 120007 / Midnight). Open the options with **`/ncb`**, or
+Retail only (Interface 120007 / Midnight). Open the options with **`/ncast`**, or
 left-click the minimap button.
 
 ---
@@ -52,33 +52,33 @@ It is class-coloured by default, and turns red when the cast is on **you**.
 
 ## Placing the bars
 
-`/ncb unlock`, or the button in the options window. Every enabled bar shows a demo
+`/ncast unlock`, or the button in the options window. Every enabled bar shows a demo
 cast while unlocked, so you are lining up the real thing rather than an empty box.
-Drag them, then `/ncb lock`. The two position sliders nudge whichever bar's tab you
+Drag them, then `/ncast lock`. The two position sliders nudge whichever bar's tab you
 are on, and agree with wherever you last dropped it.
 
 ## Commands
 
 ```
-/ncb                  open the options window
-/ncb unlock | lock    place the bars
-/ncb test             a demo cast on every bar
-/ncb on | off         master switch
-/ncb reset <bar|all>  start a bar over  (player|target|focus|pet|boss|all)
-/ncb minimap          show or hide the minimap button
-/ncb diag             what the addon sees on every bar, right now
-/ncb debug            log every spellcast event as it arrives
+/ncast                  open the options window
+/ncast unlock | lock    place the bars
+/ncast test             a demo cast on every bar
+/ncast on | off         master switch
+/ncast reset <bar|all>  start a bar over  (player|target|focus|pet|boss|all)
+/ncast minimap          show or hide the minimap button
+/ncast diag             what the addon sees on every bar, right now
+/ncast debug            log every spellcast event as it arrives
 ```
 
 ## When a bar does not show up
 
-`/ncb diag` prints a line per bar: whether it is enabled, whether the unit is
+`/ncast diag` prints a line per bar: whether it is enabled, whether the unit is
 even there, whether the frame is shown and at what alpha, its size and position,
 whether its events are registered, and what the client says that unit is casting
 at that moment. Target the unit that is casting and run it — the line tells you
 whether the addon is missing the cast or drawing it somewhere you are not looking.
 
-`/ncb debug` then logs each spellcast event as it lands, which separates "no event
+`/ncast debug` then logs each spellcast event as it lands, which separates "no event
 arrived" from "event arrived, bar did not draw".
 
 Bars do not rely on events alone: five times a second each one checks what its
@@ -111,7 +111,7 @@ work. nugsCastBars uses that throughout:
   without any code branching on the value.
 - `UnitSpellTargetName` / `UnitSpellTargetClass` give the cast's actual target.
 
-Each bar reports which mode it is drawing in (`/ncb diag`):
+Each bar reports which mode it is drawing in (`/ncast diag`):
 
 | mode | when | what you get |
 |---|---|---|

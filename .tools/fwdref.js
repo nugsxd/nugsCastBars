@@ -14,6 +14,15 @@
 // halves matter: the declaration has to be found wherever it is, and it only
 // shadows from its own line onward.
 //
+// The version after THAT still only compared a reference against declarations in
+// its OWN block. Descending into a function body started a fresh scanBlock with a
+// fresh declLine, so the enclosing block's later declarations were invisible from
+// inside the function -- which is where essentially all real code lives. It
+// reported clean on nugsCombatText/Core.lua, where an ApplyFont defined at line
+// 200 read a `db` declared local at line 221 and bound to a nil global instead,
+// for 774 errors. Declarations pending in ENCLOSING blocks are now threaded down
+// through nesting, which is the whole point of the check.
+//
 //   node fwdref.js D:/Claude/nugsAuras/*.lua
 //
 // Exits non-zero if anything is found.
@@ -35,17 +44,36 @@ for (const file of process.argv.slice(2)) {
   const ast = luaparse.parse(src, { luaVersion: '5.1', locations: true, comments: false });
   const hits = [];
 
-  function scanBlock(stmts, outerInScope) {
+  function scanBlock(stmts, outerInScope, outerPending) {
     // Every name this block declares, and the line it becomes valid on.
     const declLine = new Map();
     for (const st of stmts) {
       if (st.type === 'LocalStatement') {
-        for (const v of st.variables)
-          if (!declLine.has(v.name)) declLine.set(v.name, st.loc.start.line);
+        for (let i = 0; i < st.variables.length; i++) {
+          const v = st.variables[i];
+          // `local UnitGUID = UnitGUID` is the localise-a-global-for-speed idiom.
+          // Uses above it do bind to the global, but the local is that same global,
+          // so nothing can go wrong and flagging it is pure noise. This is the only
+          // shape where an earlier reference is provably harmless -- `local db` and
+          // `local db = {}` are the real bug and stay flagged.
+          const init = st.init && st.init[i];
+          const selfCache = init && init.type === 'Identifier' && init.name === v.name;
+          if (!selfCache && !declLine.has(v.name)) declLine.set(v.name, st.loc.start.line);
+        }
       } else if (st.type === 'FunctionDeclaration' && st.isLocal && st.identifier) {
         if (!declLine.has(st.identifier.name)) declLine.set(st.identifier.name, st.loc.start.line);
       }
     }
+
+    // Declarations still to come, in this block AND every block enclosing it. A
+    // reference from inside a nested function has to be checked against the
+    // enclosing file scope too -- that is where `local db` sits while the function
+    // that reads it is being defined forty lines above.
+    //
+    // This block's own declarations overwrite an outer entry of the same name,
+    // because from here on it is the inner one that will shadow.
+    const pending = new Map(outerPending);
+    for (const [name, line] of declLine) pending.set(name, line);
 
     const inScope = new Set(outerInScope);
 
@@ -61,7 +89,7 @@ for (const file of process.argv.slice(2)) {
         const inner = new Set(scope);
         for (const p of node.parameters || []) if (p.name) inner.add(p.name);
         if (node.identifier && !node.isLocal) expr(node.identifier, scope);
-        scanBlock(node.body, inner);
+        scanBlock(node.body, inner, pending);
         return;
       }
 
@@ -70,14 +98,17 @@ for (const file of process.argv.slice(2)) {
         for (const k of ['start', 'end', 'step', 'iterators']) if (node[k]) expr(node[k], scope);
         const inner = new Set(scope);
         for (const v of node.variables || []) if (v.name) inner.add(v.name);
-        scanBlock(node.body, inner);
+        scanBlock(node.body, inner, pending);
         return;
       }
 
       if (node.type === 'Identifier' && node.loc) {
-        if (!scope.has(node.name) && declLine.has(node.name)
-            && node.loc.start.line < declLine.get(node.name)) {
-          hits.push({ name: node.name, used: node.loc.start.line, decl: declLine.get(node.name) });
+        // Not yet in scope at this point, but declared local later somewhere that
+        // encloses it: Lua binds this to a global and the local never sees it.
+        const decl = pending.get(node.name);
+        if (!scope.has(node.name) && decl !== undefined
+            && node.loc.start.line < decl) {
+          hits.push({ name: node.name, used: node.loc.start.line, decl });
         }
         return;
       }
@@ -101,7 +132,7 @@ for (const file of process.argv.slice(2)) {
     }
   }
 
-  scanBlock(ast.body, new Set());
+  scanBlock(ast.body, new Set(), new Map());
 
   const seen = new Set();
   const uniq = hits.filter(h => {

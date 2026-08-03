@@ -1,5 +1,33 @@
 # nugsCastBars — changelog
 
+## 0.7.1
+
+- **The settings window gets out of the way while you place your cast bars.** Unlocking
+  hides it and puts up a small bar instead - Lock bars and Demo cast - and locking brings the
+  window back exactly where it was. Placing things meant dragging boxes the window was
+  usually sitting on top of, so it had to be shoved aside and dragged back every time.
+- The bar can be dragged if it is in the way, and Escape locks rather than just
+  dismissing it - hiding it while things were still unlocked would have left nothing on
+  screen to end that state.
+- `/ncast unlock` puts the bar up too. If the settings window was not open when you
+  unlocked, locking does not conjure one.
+- **Fixed: a dropdown could run off the bottom of a smaller screen.** Four of them
+  dropped straight down from their button with no check that there was room below and
+  no clamping, while the lists beside them already handled it. They now open upwards
+  when there is no room, and are clamped as a backstop - clamping alone would slide a
+  list up over the button that opened it, hiding the thing being changed.
+- **The settings window closes when a fight starts, and the anchor locks.** Not because
+  anything here would be blocked - none of these windows touch a secure frame, so
+  nothing throws "action blocked" the way an addon driving action bars does. The
+  reason is that both states put fake data on screen: unlocked, every bar carries a preview cast, and sample
+  data during a real pull cannot be told apart from the real thing. Nothing reopens
+  when combat drops.
+- **The slash command is now `/ncast`.** `/nugscastbars` still works.
+- **`/ncb` now belongs to nugsComboBar.** If you have a macro using `/ncb` for cast
+  bars it will not error - it will quietly drive the other addon, which is worse. Both
+  commands changed at once on purpose, while the number of people holding macros is
+  still small.
+
 ## 0.7.0
 
 - **Use your own sound file for the interrupt cue.** Open the sound list, pick
