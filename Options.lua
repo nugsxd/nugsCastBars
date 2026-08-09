@@ -689,9 +689,20 @@ local function ScrollArea(parent)
     -- Only when it is zero: several callers set a deliberate width, and clobbering
     -- those would trade this bug for a layout one. Rows are anchored to the content's
     -- edges, so they take the corrected width with them.
+    --
+    -- The width of the *scroll frame* is checked too, and that is not belt and braces.
+    -- This handler also fires during the first layout pass, while the scroll frame
+    -- itself still measures 0. Without the check it copies that 0 onto the content, the
+    -- content is then no longer "unset" - 0 is still <= 1 - and no further size change
+    -- arrives to correct it. Rows anchored to the content's two top corners come out
+    -- zero-wide, which still *draws*, because a FontString does not clip to its parent,
+    -- but a zero-wide Button has no hit rectangle: a list you can read and cannot click.
+    -- Every list here also sets an explicit content width at its call site, which is the
+    -- primary mechanism; this stays a backstop for the next one that does not.
     scroll:SetScript("OnSizeChanged", function(self)
-        if (self.content:GetWidth() or 0) <= 1 then
-            self.content:SetWidth(self:GetWidth() or 0)
+        local w = self:GetWidth() or 0
+        if w > 1 and (self.content:GetWidth() or 0) <= 1 then
+            self.content:SetWidth(w)
         end
         if self.UpdateBar then self:UpdateBar() end
     end)

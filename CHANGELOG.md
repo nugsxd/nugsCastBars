@@ -1,5 +1,13 @@
 # nugsCastBars — changelog
 
+## 0.7.2
+
+- Internal hardening, no visible change. The scroll helper's fallback width guard could
+  copy a zero width onto a list's content frame during the first layout pass, and once
+  copied nothing would correct it - rows would draw but not be clickable. Every list here
+  sets its own content width afterwards, so this was never reachable; the guard now waits
+  for the scroll frame to have a real width, so it stays a safe backstop.
+
 ## 0.7.1
 
 - **The settings window gets out of the way while you place your cast bars.** Unlocking
