@@ -1,5 +1,111 @@
 # nugsCastBars — changelog
 
+## 0.8.3
+
+- **Fixed: an attached GCD bar did not line up with the player cast bar if the two
+  had different scales.** It was matching that bar's width but keeping its own
+  scale, and width is measured in a frame's own units — so two frames of equal width
+  at different scales are not the same size on screen, which is precisely the
+  misalignment attaching exists to prevent. Attached mode now adopts the player
+  bar's scale as well as its width, and its own scale slider is hidden while
+  attached rather than left sitting there doing nothing.
+- **Ready for patch 12.1.** The .toc declares `120007, 120100`, so this is current
+  on live and on the 12.1 PTR at once rather than being flagged out of date on one of
+  them. Nothing here uses an API that 12.1 removes, and the unit calls that begin
+  returning secret values in 12.1 are guarded - a release check now enforces both, so
+  it stays true.
+
+## 0.8.2
+
+- **Fixed: the GCD bar's spark was invisible.** My mistake in 0.8.1 — the spark and
+  the timer text were textures on the frame itself, and a child frame draws over
+  every texture its parent owns whatever layer that texture is on, so both status
+  bars were covering them. They now live on an overlay frame stacked above the bars.
+  The spark also has a minimum height: scaled purely off a 6px bar it was a smudge,
+  and it wants to stand proud of the bar to read at all.
+- **Latency tail on the GCD bar**, off by default. It marks the slice at the end of
+  the sweep in which a keypress still reaches the server before the global expires,
+  and it sits on whichever end the sweep actually runs out at — the left for a
+  draining bar, the right for a filling one. Worth having here even if you leave it
+  off the cast bars: "when can I press the next one" is the question this bar exists
+  to answer, and that is not quite the same as "when does the global end".
+- **Show it: always / only in combat / only out of combat.** A metronome beating
+  away while you stand in a city is noise. Default is unchanged (always), but in
+  combat is the one most people will end up on.
+
+## 0.8.1
+
+**The GCD bar now keeps beating between presses**, which is what it was asked to do
+and is not what 0.8.0 did — that one showed a global and then went quiet.
+
+- New **Behaviour** setting on the GCD tab:
+  - **Always running** (now the default) — a metronome. The bar sweeps continuously
+    at the length of your global and restarts the moment one is triggered, so the
+    rhythm is visible even when nothing is being cast. Press Judgement, watch the
+    sweep run, and it keeps cycling until the next press resets it.
+  - **Only while a global is running** — 0.8.0's behaviour, kept because it is what
+    most other GCD bars do.
+- Only a press that **actually costs a global** resets the sweep. The reset comes
+  off the rising edge of the global itself, not off any cast succeeding, so
+  off-global abilities do not disturb it — and neither does the constant cooldown
+  chatter that `SPELL_UPDATE_COOLDOWN` carries for unrelated spells.
+- The **length of your global is learned, not assumed**: read plainly from the
+  client where it will say, and otherwise measured off our own clock as each one
+  runs. Haste changes it, so it is re-earned every global rather than cached once —
+  a reading taken before the pull no longer locks out measurement for the fight.
+  `/ncast diag` reports the current length and where it came from.
+
+**Why two status bars now:** the looping sweep cannot use `SetTimerDuration` — a
+duration object only exists while a cooldown is actually running, and the loop has
+to keep going between them — so it drives `SetValue` off our own clock instead. Those
+two do not mix on one widget: a *finished* timer keeps painting its terminal state,
+and a later `SetValue` on the same bar does not necessarily repaint it. There is no
+documented way to detach a timer once armed. Two bars with one shown at a time
+sidesteps the question rather than betting on undocumented repaint behaviour.
+
+## 0.8.0
+
+**A global cooldown bar**, on its own **GCD** tab. Off by default.
+
+- A slim bar showing the global running down, so the next ability's readiness can be
+  read without watching an action bar.
+- **Attached by default**: it sits under the player cast bar and matches its width,
+  so the two stay lined up wherever that bar is moved — no second thing to place.
+  Free placement is the other option, draggable with `/ncast unlock` like everything
+  else.
+- Height, scale, texture, border, spark, colours, and a **direction** setting —
+  empties as it runs out, or fills. Optional remaining-time text with its own font,
+  size, outline and decimals; off by default, since at a second and a half the bar
+  reads faster than a number.
+- "Hide while no global is running" can be turned off for anyone who would rather
+  have an empty bar sitting there than something appearing at the edge of vision.
+- `/ncast diag` reports whether it is on, how it is anchored, and whether the two
+  things it needs from the client are answering.
+
+It is driven the same way the cast bars are, and for the same reason: the global is
+a spell (61304), `C_Spell.GetSpellCooldownDuration` hands back a Duration object,
+and `StatusBar:SetTimerDuration` animates from it — so the fill stays correct in
+combat without a number ever passing through Lua. Whether the bar is up at all is
+decided by `isActive`, which is NeverSecret and so a real boolean to branch on.
+
+## 0.7.4
+
+- **Bars can no longer be placed during combat**, which matches the rule that a pull
+  locks them in the first place. Unlocking puts sample bars on screen, and a sample
+  cast during a real pull cannot be told apart from a real one. It is now refused with
+  a line of chat rather than half-entered.
+
+## 0.7.3
+
+- **Fixed: "action blocked" errors during combat.** `SetPropagateKeyboardInput` - used
+  so that Escape closes a dropdown or the placement bar rather than the window behind
+  it - is protected during a fight. Calling it then raises ADDON_ACTION_BLOCKED naming
+  this addon, and unlike a Lua error it cannot be caught: it taints the addon for the
+  rest of the session. 8 call sites now skip themselves in combat.
+- The worst of them was the key handler: it guarded the Escape branch but not the
+  branch every *other* key took, so with a list open in combat any keypress would have
+  thrown it - movement keys included.
+
 ## 0.7.2
 
 - Internal hardening, no visible change. The scroll helper's fallback width guard could

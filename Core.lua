@@ -344,6 +344,23 @@ NCB.TARGET_POS = {
     { key = "right",  label = "Right of the bar" },
 }
 NCB.GROWS = { "down", "up" }
+NCB.GCD_ANCHORS = {
+    { key = "playerbar", label = "Under the player cast bar" },
+    { key = "screen",    label = "Anywhere on screen" },
+}
+NCB.GCD_VISIBILITY = {
+    { key = "always",   label = "Always" },
+    { key = "combat",   label = "Only in combat" },
+    { key = "nocombat", label = "Only out of combat" },
+}
+NCB.GCD_MODES = {
+    { key = "loop",   label = "Always running (resets on each press)" },
+    { key = "window", label = "Only while a global is running" },
+}
+NCB.GCD_DIRECTIONS = {
+    { key = "drain", label = "Empties as it runs out" },
+    { key = "fill",  label = "Fills as it runs out" },
+}
 NCB.ANNOUNCE = {
     { key = "off",    label = "Do not announce" },
     { key = "chat",   label = "In the chat frame" },
@@ -463,6 +480,39 @@ NCB.defaults = {
     announceColor      = { 0.25, 1.00, 0.45 },
     announceHold       = 1.50,
     announceFade       = 0.60,
+    -- The global cooldown bar. Its own table rather than an entry in `bars`,
+    -- because it is not a cast bar: it has no unit, no spell, no target, and none
+    -- of the settings that go with those.
+    gcd = {
+        enabled    = false,     -- opt-in
+        mode       = "loop",    -- loop | window
+        visibility = "always",  -- always | combat | nocombat
+        anchor    = "playerbar",-- playerbar | screen
+        gap       = 3,          -- space below the player bar, attached mode only
+        width     = 260,        -- free-placement mode only; attached follows the player bar
+        height    = 6,          -- slim, which is the point of it
+        scale     = 1.00,
+        point     = "CENTER",
+        relPoint  = "CENTER",
+        x         = 0,
+        y         = -232,
+        texture   = "Blizzard Raid Bar",
+        direction = "drain",    -- drain | fill
+        hideWhenReady = true,
+        showBorder = true,
+        showSpark  = false,
+        showLatency = false,
+        showTime   = false,
+        decimals   = 1,
+        font        = "Friz Quadrata TT",
+        fontSize    = 10,
+        fontOutline = "OUTLINE",
+        color           = { 0.85, 0.85, 0.90 },
+        colorLatency    = { 0.90, 0.10, 0.10, 0.40 },
+        colorBackground = { 0.06, 0.06, 0.07, 0.85 },
+        colorBorder     = { 0.00, 0.00, 0.00, 1.00 },
+        colorText       = { 1.00, 1.00, 1.00 },
+    },
     bars          = {},
 }
 

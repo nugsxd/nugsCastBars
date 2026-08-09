@@ -427,6 +427,9 @@ function Bars:ApplyAll()
         end
     end
     NCB.Interrupts:ApplyDisplay()
+    -- After the bars, because attached mode measures the player bar it hangs from.
+    NCB.GCD:Apply()
+    NCB.GCD:Check()
     if not NCB.db.locked then self:ShowPreviews() end
 end
 
@@ -917,6 +920,21 @@ function NCB.Diagnostics()
         NCB.db.interruptSound and ("on (" .. tostring(NCB.db.interruptSoundName) .. ")") or "off",
         NCB.Interrupts.watching and "" or " |cffaaaaaa- not watching|r"))
 
+    -- The global cooldown bar: whether it is on, and whether the two things it
+    -- needs from the client are actually answering.
+    local gcfg    = NCB.db.gcd
+    local running = NCB.GCD.IsRunning()
+    print(string.format("  gcd bar: %s, %s, anchored %s | readable: %s | handle: %s",
+        gcfg.enabled and "on" or "OFF",
+        tostring(gcfg.mode),
+        tostring(gcfg.anchor),
+        running == nil and "|cffff4040no|r" or ("yes, " .. (running and "running now" or "idle")),
+        (C_Spell and C_Spell.GetSpellCooldownDuration) and "|cff40ff40present|r"
+            or "|cffff4040missing|r"))
+    print(string.format("  gcd length: %.2fs (%s)", NCB.GCD:Length(),
+        NCB.GCD.length and (NCB.GCD.lengthFrom == "client" and "read from the client"
+                            or "measured here") or "assumed - none seen yet"))
+
     print("  |cffaaaaaadrawing modes: timer|r = client-driven bar and countdown, " ..
           "|cffaaaaaatimed|r = our own maths, |cffaaaaaasecret|r = accurate bar but no " ..
           "numbers, |cffaaaaaaguessed|r = remembered length, |cffaaaaaaunknown|r = sweep.")
@@ -1304,6 +1322,7 @@ function Bars:SetLocked(locked)
     -- The announcement moves with the same unlock, so one command places the whole
     -- addon rather than leaving one piece on a switch of its own.
     NCB.Interrupts:SetLocked(NCB.db.locked)
+    NCB.GCD:SetLocked(NCB.db.locked)
     for _, f in ipairs(Bars.list) do
         f:EnableMouse(not NCB.db.locked)
         f.dragLabel:SetShown(not NCB.db.locked)
@@ -1325,6 +1344,15 @@ end
 -- change to re-assert the current state. Everything chatty, and everything that
 -- rearranges windows, belongs here so that neither happens on a slider tick.
 function Bars:ToggleLock(locked)
+    -- Unlocking mid-fight is refused, for the same reason a pull locks the bars:
+    -- placing them puts sample bars on screen, and sample casts during a real pull
+    -- cannot be told apart from real ones. The button and the slash command both come
+    -- through here, so this is the only place it needs saying.
+    if not locked and InCombatLockdown() then
+        NCB.Print("bars cannot be placed during combat - try again after the fight.")
+        return
+    end
+
     self:SetLocked(locked)
     if locked then
         NCB.Print("bars locked.")

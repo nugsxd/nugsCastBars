@@ -1,8 +1,8 @@
-## Interface: 120007
+## Interface: 120007, 120100
 ## Title: nugsCastBars
 ## Notes: Replacement cast bars for you, your target, focus, pet and bosses.|nTexture, font, icon, timer and cast-target display are all configurable per bar.|nCreated by nugs.
 ## Author: nugs
-## Version: 0.7.2
+## Version: 0.8.3
 ## IconTexture: Interface\AddOns\nugsCastBars\icon
 
 # NOTE: if the addon list shows a blank icon, this BLP is not loading on your
@@ -21,6 +21,7 @@
 
 Core.lua
 Interrupts.lua
+GCD.lua
 Bars.lua
 Options.lua
 Minimap.lua

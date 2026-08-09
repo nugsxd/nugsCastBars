@@ -41,10 +41,21 @@ local COL_W     = math.floor((CONTENT_W - COL_GAP) / 2)
 local ROW_H    = 22
 
 local window, tabStrip, barPanel, generalPanel, barContent, generalContent
-local barWidgets, generalWidgets = {}, {}
+local gcdPanel, gcdScroll, gcdContent, gcdCol
+local barWidgets, generalWidgets, gcdWidgets = {}, {}, {}
+local BuildGCDPanel   -- defined below, called from BuildWindow
 local sink = barWidgets            -- where newly built widgets register themselves
 local currentKey = "player"
 local RelayoutAll                  -- forward declaration
+
+-- SetPropagateKeyboardInput is protected during combat, and a blocked call is not a
+-- Lua error: pcall does not contain it, it raises ADDON_ACTION_BLOCKED and taints the
+-- addon for the rest of the session. So it is never called inside a lockdown, and the
+-- next key pressed after combat ends restores propagation on its own.
+local function SafePropagate(frame, value)
+    if InCombatLockdown() then return end
+    frame:SetPropagateKeyboardInput(value)
+end
 
 local function cfg() return NCB.Config(currentKey) end
 local function isBoss()   return currentKey == "boss"   end
@@ -527,13 +538,13 @@ local function AttachPopupBehaviour(popup, closeOnOutside)
     -- only for the Escape that is actually being handled, which is what stops the same
     -- press also reaching CloseSpecialWindows and shutting the window.
     popup:EnableKeyboard(true)
-    popup:SetPropagateKeyboardInput(true)
+    SafePropagate(popup, true)
     popup:SetScript("OnKeyDown", function(self, key)
         if key == "ESCAPE" and not InCombatLockdown() then
-            self:SetPropagateKeyboardInput(false)
+            SafePropagate(self, false)
             self:Hide()
         else
-            self:SetPropagateKeyboardInput(true)
+            SafePropagate(self, true)
         end
     end)
 
@@ -558,7 +569,7 @@ local function AttachPopupBehaviour(popup, closeOnOutside)
     end)
     popup:HookScript("OnHide", function(self)
         self:SetScript("OnUpdate", nil)
-        self:SetPropagateKeyboardInput(true)
+        SafePropagate(self, true)
         if catcher then catcher:Hide() end
     end)
     return popup
@@ -1270,8 +1281,9 @@ local function SelectTab(key)
         tab.underline:SetShown(on)
         tab.text:SetTextColor(unpack(on and C.gold or C.faint))
     end
-    barPanel:SetShown(key ~= "general")
+    barPanel:SetShown(key ~= "general" and key ~= "gcd")
     generalPanel:SetShown(key == "general")
+    gcdPanel:SetShown(key == "gcd")
     NCB.RefreshOptions()
 end
 
@@ -1283,6 +1295,8 @@ local function BuildTabs(parent)
     for _, def in ipairs(NCB.UNITS) do
         entries[#entries + 1] = { key = def.key, label = def.label }
     end
+    -- Last, and not one of NCB.UNITS: the global cooldown has no unit behind it.
+    entries[#entries + 1] = { key = "gcd", label = "GCD" }
 
     local x = 0
     for _, entry in ipairs(entries) do
@@ -1516,6 +1530,135 @@ end
 --------------------------------------------------------------------------------
 -- The general panel
 --------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- The GCD panel
+-- Its own tab because the global cooldown is not a cast: no unit, no spell, no
+-- target, and none of the settings that go with those. What it shares with the
+-- bars is placement and looks, and those read the same here as everywhere else.
+--------------------------------------------------------------------------------
+BuildGCDPanel = function(content)
+    sink = gcdWidgets
+    gcdCol = NewColumn(content, 0, COL_W * 2 - 40)
+    local G = gcdCol
+
+    local function gcfg() return NCB.db.gcd end
+    local attached = function() return gcfg().anchor == "playerbar" end
+    local free     = function() return gcfg().anchor ~= "playerbar" end
+
+    G:Header("Global cooldown bar")
+    G:Hint("A slim bar showing the global cooldown, so you can see when the next\n" ..
+           "ability can go out without watching an action bar.")
+    G:Add(Check(content, "Show the global cooldown bar",
+        function() return gcfg().enabled end,
+        function(v) gcfg().enabled = v end), ROW_H)
+
+    G:Add(Choice(content, "Behaviour", NCB.GCD_MODES,
+        function() return gcfg().mode end,
+        function(v) gcfg().mode = v end), 26)
+    G:Hint("|cffffd479Always running|r is a metronome: the bar sweeps continuously at the\n" ..
+           "length of your global and restarts the moment one is triggered, so between\n" ..
+           "presses it keeps beating rather than sitting empty. Only a press that\n" ..
+           "actually costs a global resets it.",
+        function() return gcfg().mode == "loop" end)
+    G:Hint("|cffffd479Only while running|r is the conventional behaviour: it shows the global\n" ..
+           "and then goes quiet until the next one.",
+        function() return gcfg().mode == "window" end)
+
+    G:Add(Choice(content, "Show it", NCB.GCD_VISIBILITY,
+        function() return gcfg().visibility end,
+        function(v) gcfg().visibility = v end), 26)
+    G:Hint("A metronome beating away while you stand in a city is noise; |cffffd479Only in\n" ..
+           "combat|r is usually the one you want once the novelty wears off.",
+        function() return gcfg().mode == "loop" and gcfg().visibility == "always" end)
+
+    G:Header("Placement")
+    G:Add(Choice(content, "Anchor", NCB.GCD_ANCHORS,
+        function() return gcfg().anchor end,
+        function(v) gcfg().anchor = v end), 26)
+    G:Hint("Attached, it sits under the player cast bar and matches its width, so the\n" ..
+           "two stay lined up wherever you move that bar.", attached)
+    G:Add(Slider(content, "Gap below the player bar", 0, 30, 1,
+        function() return gcfg().gap end,
+        function(v) gcfg().gap = v end, "%d px"), 42, attached)
+    G:Add(Slider(content, "Width", 60, 600, 2,
+        function() return gcfg().width end,
+        function(v) gcfg().width = v end, "%d px"), 42, free)
+    G:Add(Slider(content, "Horizontal position", -900, 900, 1,
+        function() return gcfg().x end,
+        function(v) gcfg().x = v end, "%d"), 42, free)
+    G:Add(Slider(content, "Vertical position", -600, 600, 1,
+        function() return gcfg().y end,
+        function(v) gcfg().y = v end, "%d"), 42, free)
+    G:Hint("Free placement can also be dragged with |cffffd479/ncast unlock|r.", free)
+
+    G:Header("Bar")
+    G:Add(Slider(content, "Height", 2, 40, 1,
+        function() return gcfg().height end,
+        function(v) gcfg().height = v end, "%d px"), 42)
+    G:Add(Slider(content, "Scale", 0.5, 2.0, 0.05,
+        function() return gcfg().scale end,
+        function(v) gcfg().scale = v end, "%.2fx"), 42, free)
+    G:Hint("Scale follows the player cast bar while attached, so the two line up.",
+        attached)
+    G:Add(MediaButton(content, "texture", "Texture",
+        function() return gcfg().texture end,
+        function(v) gcfg().texture = v end), 26)
+    G:Add(Choice(content, "Direction", NCB.GCD_DIRECTIONS,
+        function() return gcfg().direction end,
+        function(v) gcfg().direction = v end), 26)
+    G:Add(Check(content, "Hide it while no global is running",
+        function() return gcfg().hideWhenReady end,
+        function(v) gcfg().hideWhenReady = v end,
+        "Off leaves an empty bar sitting there, which some people prefer to " ..
+        "something appearing and vanishing at the edge of vision."),
+        ROW_H, function() return gcfg().mode == "window" end)
+    G:Add(Check(content, "Draw a border",
+        function() return gcfg().showBorder end,
+        function(v) gcfg().showBorder = v end), ROW_H)
+    G:Add(Check(content, "Show the spark",
+        function() return gcfg().showSpark end,
+        function(v) gcfg().showSpark = v end), ROW_H)
+    G:Add(Check(content, "Show the latency tail",
+        function() return gcfg().showLatency end,
+        function(v) gcfg().showLatency = v end,
+        "Marks the slice at the end of the sweep in which a keypress still reaches " ..
+        "the server before the global expires."), ROW_H)
+    G:Hint("Worth having here even if you leave it off the cast bars: \"when can I\n" ..
+           "press the next one\" is the question this bar exists to answer, and that\n" ..
+           "is not quite the same as \"when does the global end\".",
+        function() return gcfg().showLatency end)
+
+    G:Header("Timer")
+    G:Add(Check(content, "Show the time remaining",
+        function() return gcfg().showTime end,
+        function(v) gcfg().showTime = v end), ROW_H)
+    local timeOn = function() return gcfg().showTime end
+    G:Add(MediaButton(content, "font", "Font",
+        function() return gcfg().font end,
+        function(v) gcfg().font = v end), 26, timeOn)
+    G:Add(Choice(content, "Outline", NCB.OUTLINES,
+        function() return gcfg().fontOutline end,
+        function(v) gcfg().fontOutline = v end), 26, timeOn)
+    G:Add(Slider(content, "Font size", 6, 24, 1,
+        function() return gcfg().fontSize end,
+        function(v) gcfg().fontSize = v end, "%d"), 42, timeOn)
+    G:Add(Slider(content, "Decimal places", 0, 2, 1,
+        function() return gcfg().decimals end,
+        function(v) gcfg().decimals = v end, "%d"), 42, timeOn)
+    G:Hint("A global is a second and a half at worst, so this is off by default -\n" ..
+           "at that length the bar itself reads faster than a number does.", timeOn)
+
+    G:Header("Colours")
+    G:Add(Swatch(content, "Bar",        function() return gcfg().color end), ROW_H)
+    G:Add(Swatch(content, "Latency tail", function() return gcfg().colorLatency end, true),
+        ROW_H, function() return gcfg().showLatency end)
+    G:Add(Swatch(content, "Background", function() return gcfg().colorBackground end, true), ROW_H)
+    G:Add(Swatch(content, "Border",     function() return gcfg().colorBorder end, true), ROW_H)
+    G:Add(Swatch(content, "Timer text", function() return gcfg().colorText end), ROW_H, timeOn)
+
+    sink = barWidgets
+end
+
 local generalCol
 
 local function BuildGeneralPanel(content)
@@ -1814,8 +1957,18 @@ local function BuildWindow()
     generalContent = generalScroll.content
     generalContent:SetWidth(CONTENT_W)
 
+    gcdPanel = Panel(f, { 0.05, 0.05, 0.05, 0.9 })
+    gcdPanel:SetPoint("TOPLEFT", 10, -68)
+    gcdPanel:SetPoint("BOTTOMRIGHT", -10, 44)
+    gcdScroll = ScrollArea(gcdPanel)
+    gcdScroll:SetPoint("TOPLEFT", 10, -10)
+    gcdScroll:SetPoint("BOTTOMRIGHT", -10, 10)
+    gcdContent = gcdScroll.content
+    gcdContent:SetWidth(CONTENT_W)
+
     BuildBarPanel(barContent)
     BuildGeneralPanel(generalContent)
+    BuildGCDPanel(gcdContent)
 
     -- Bottom bar ---------------------------------------------------------------
     unlockBtn = Button(f, "", 128, 22, function()
@@ -1824,12 +1977,16 @@ local function BuildWindow()
     unlockBtn:SetPoint("BOTTOMLEFT", 10, 12)
 
     local testBtn = Button(f, "Demo cast", 92, 22, function()
-        if currentKey == "general" then NCB.Bars:TestAll() else NCB.Bars:TestOne(currentKey) end
+        if currentKey == "general" or currentKey == "gcd" then
+            NCB.Bars:TestAll()
+        else
+            NCB.Bars:TestOne(currentKey)
+        end
     end)
     testBtn:SetPoint("LEFT", unlockBtn, "RIGHT", 6, 0)
 
     local resetBtn = Button(f, "Reset this bar", 110, 22, function()
-        if currentKey == "general" then return end
+        if currentKey == "general" or currentKey == "gcd" then return end
         NCB.ResetBar(currentKey)
         NCB.Print(currentKey .. " bar reset to defaults.")
         NCB.RefreshOptions()
@@ -1837,7 +1994,7 @@ local function BuildWindow()
     resetBtn:SetPoint("LEFT", testBtn, "RIGHT", 6, 0)
 
     local copyBtn = Button(f, "Copy this look to every bar", 176, 22, function()
-        if currentKey == "general" then return end
+        if currentKey == "general" or currentKey == "gcd" then return end
         NCB.CopyLook(currentKey)
         NCB.Print("every bar now uses the " .. currentKey .. " bar's look.")
         NCB.RefreshOptions()
@@ -1870,6 +2027,10 @@ RelayoutAll = function()
         local h = generalCol:Layout()
         generalContent:SetHeight(h + 12)
         generalScroll:UpdateBar()
+    elseif currentKey == "gcd" then
+        local h = gcdCol:Layout()
+        gcdContent:SetHeight(h + 12)
+        gcdScroll:UpdateBar()
     else
         local h = math.max(leftCol:Layout(), rightCol:Layout())
         barContent:SetHeight(h + 12)
@@ -1880,7 +2041,9 @@ end
 function NCB.RefreshOptions()
     if not window or not NCB.db then return end
 
-    local list = (currentKey == "general") and generalWidgets or barWidgets
+    local list = (currentKey == "general") and generalWidgets
+                 or (currentKey == "gcd") and gcdWidgets
+                 or barWidgets
     for _, w in ipairs(list) do
         if w.Refresh then w.Refresh() end
     end
@@ -1889,7 +2052,8 @@ function NCB.RefreshOptions()
         unlockBtn:SetLabel(NCB.db.locked and "Unlock bars" or "Lock bars")
     end
     if window.bottomButtons then
-        local usable = (currentKey ~= "general")
+        -- Reset and copy-look act on a cast bar's config; neither tab has one.
+        local usable = (currentKey ~= "general" and currentKey ~= "gcd")
         window.bottomButtons.reset:SetAlpha(usable and 1 or 0.35)
         window.bottomButtons.copy:SetAlpha(usable and 1 or 0.35)
     end
@@ -1955,13 +2119,13 @@ local function BuildMoveBar()
     -- Escape locks rather than just dismissing the bar. Hiding it while things were
     -- still unlocked would leave the state with nothing on screen to end it.
     f:EnableKeyboard(true)
-    f:SetPropagateKeyboardInput(true)
+    SafePropagate(f, true)
     f:SetScript("OnKeyDown", function(self, key)
         if key == "ESCAPE" and not InCombatLockdown() then
-            self:SetPropagateKeyboardInput(false)
+            SafePropagate(self, false)
             NCB.Bars:ToggleLock(true)
         else
-            self:SetPropagateKeyboardInput(true)
+            SafePropagate(self, true)
         end
     end)
 
@@ -1980,7 +2144,7 @@ function NCB.OnLockChanged(locked)
             window:Hide()
         end
         moveBar = moveBar or BuildMoveBar()
-        moveBar:SetPropagateKeyboardInput(true)
+        SafePropagate(moveBar, true)
         moveBar:Show()
     else
         if moveBar then moveBar:Hide() end
