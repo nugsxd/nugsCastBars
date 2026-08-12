@@ -1,5 +1,10 @@
 # nugsCastBars — changelog
 
+## 0.8.4
+
+- Now built for patch 12.1 only. 12.1 is live, and listing the previous patch
+  alongside it claimed support for a client nobody is on any more.
+
 ## 0.8.3
 
 - **Fixed: an attached GCD bar did not line up with the player cast bar if the two
