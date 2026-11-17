@@ -309,15 +309,21 @@ local function BuildDisplay()
     f.dragLabel:SetText("nugsCastBars announcement |cff888888(drag)|r")
     f.dragLabel:Hide()
 
-    f:SetScript("OnDragStart", function(self)
-        if NCB.db.locked then return end
-        self:StartMoving()
-    end)
-    f:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        SavePosition(self)
-        if NCB.RefreshOptions then NCB.RefreshOptions() end
-    end)
+    -- Dragging, from the shared nugsMove.lua. Read the note at the top of that file:
+    -- it asserts that a frame nobody is holding is not moving, rather than closing one
+    -- more route by which a move could be left running.
+    NCB.InstallMove(f, {
+        label = "the interrupt announcement",
+        -- The mouse belongs to the lock state, not to this call.
+        mouse   = false,
+        canMove = function() return not NCB.db.locked end,
+        -- Runs however the move ended, including when the invariant ended it because
+        -- the mouse-up never arrived.
+        onEnd   = function(self)
+            SavePosition(self)
+            if NCB.RefreshOptions then NCB.RefreshOptions() end
+        end,
+    })
 
     -- Hold-then-fade as an animation rather than an OnUpdate: the timing is fixed
     -- the moment the message appears, so there is nothing for Lua to recompute

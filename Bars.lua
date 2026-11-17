@@ -253,26 +253,6 @@ local function CreateBar(cfgKey, unit, index)
     f.dragLabel:SetPoint("BOTTOM", f, "TOP", 0, 3)
     f.dragLabel:Hide()
 
-    f:SetScript("OnDragStart", function(self)
-        if NCB.db.locked then return end
-        self:StartMoving()
-    end)
-    f:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        -- StopMovingOrSizing is free to re-anchor the frame to whichever corner it
-        -- likes, so the relative point has to be saved as well. Reconstructing the
-        -- position from `point` alone would move the bar every reload.
-        local point, _, relPoint, x, y = self:GetPoint(1)
-        local cfg = NCB.Config(self.cfgKey)
-        if point and cfg then
-            cfg.point    = point
-            cfg.relPoint = relPoint or point
-            cfg.x = math.floor(x + 0.5)
-            cfg.y = math.floor(y + 0.5)
-        end
-        if NCB.RefreshOptions then NCB.RefreshOptions() end
-    end)
-
     f:SetScript("OnEvent", function(self, event, unitArg, ...)
         Bars:OnUnitEvent(self, event, unitArg, ...)
     end)
@@ -282,6 +262,37 @@ local function CreateBar(cfgKey, unit, index)
     end
 
     f:SetScript("OnUpdate", function(self, elapsed) Bars:Advance(self, elapsed) end)
+
+    -- Dragging, from the shared nugsMove.lua. Read the note at the top of that file:
+    -- it asserts that a frame nobody is holding is not moving, rather than closing one
+    -- more route by which a move could be left running.
+    --
+    -- AFTER the OnUpdate above, deliberately. The installer chains whatever handler is
+    -- already there, so this order keeps the bar advancing AND gets the invariant;
+    -- the other order would have the line above silently replace it.
+    NCB.InstallMove(f, {
+        label = "a cast bar",
+        -- The mouse belongs to the lock state, not to this call: a bar takes clicks
+        -- only while unlocked, so every click lands in the world the rest of the time.
+        mouse   = false,
+        canMove = function() return not NCB.db.locked end,
+        -- Runs however the move ended, including when the invariant ended it because
+        -- the mouse-up never arrived.
+        onEnd   = function(self)
+            -- StopMovingOrSizing is free to re-anchor the frame to whichever corner it
+            -- likes, so the relative point has to be saved as well. Reconstructing the
+            -- position from `point` alone would move the bar every reload.
+            local point, _, relPoint, x, y = self:GetPoint(1)
+            local cfg = NCB.Config(self.cfgKey)
+            if point and cfg then
+                cfg.point    = point
+                cfg.relPoint = relPoint or point
+                cfg.x = math.floor(x + 0.5)
+                cfg.y = math.floor(y + 0.5)
+            end
+            if NCB.RefreshOptions then NCB.RefreshOptions() end
+        end,
+    })
 
     Bars.frames[unit] = f
     Bars.list[#Bars.list + 1] = f
@@ -671,6 +682,34 @@ local function SameSpell(f, spellID)
     return mine == spellID
 end
 
+-- Whether the cast this bar is drawing is STILL RUNNING according to the client.
+--
+-- The one question that separates a real failure from a queued one. Pressing the
+-- same spell again while it is casting queues a second attempt, and that attempt
+-- fails immediately - with the same spell id as the cast in progress. Matching on
+-- spell id alone therefore marks the running cast failed while it carries on
+-- perfectly happily, which is what made a Prayer of Healing look cancelled several
+-- times a fight. Spell queueing is normal play, not an edge case.
+--
+-- The castGUID the event carries would be the obvious discriminator and is not
+-- usable: it went secret in 12.0, and comparing two secret values throws. barID
+-- exists precisely because of that, so identity is checked with it and falls back to
+-- the spell id when the client will not hand one over.
+local function StillCasting(f, unit)
+    local live = ReadCast(unit)
+    if not (f.cast and live) then return false end
+    if live.channel ~= f.cast.channel then return false end
+
+    if f.cast.barID and live.barID then return f.cast.barID == live.barID end
+    if f.cast.spellID and live.spellID then return f.cast.spellID == live.spellID end
+
+    -- Neither identity is readable. Something is being cast on this unit and the bar
+    -- is drawing something on this unit, so the safer answer is that it is the same
+    -- cast: a bar that stays up a moment too long is a much smaller error than one
+    -- that reports a cast failed while you are still casting it.
+    return true
+end
+
 function Bars:OnUnitEvent(f, event, unit, castGUID, spellID, interruptedBy)
     if unit ~= f.unit then return end
     if NCB.debug then
@@ -704,7 +743,12 @@ function Bars:OnUnitEvent(f, event, unit, castGUID, spellID, interruptedBy)
         if f.cast and SameSpell(f, spellID) then self:Finish(f, "interrupted") end
 
     elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" then
-        if f.cast and not f.cast.channel and SameSpell(f, spellID) then
+        -- The client is asked whether the cast is still running before the bar calls
+        -- it a failure. A failure that is real has already ended the cast, so this
+        -- costs nothing there; a failure that belongs to a queued second press leaves
+        -- the original running, and that is the case this rejects.
+        if f.cast and not f.cast.channel and SameSpell(f, spellID)
+           and not StillCasting(f, unit) then
             self:Finish(f, "failed")
         end
 

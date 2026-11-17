@@ -536,20 +536,44 @@ local function CopyDefaults(dst, src)
 end
 NCB.CopyDefaults = CopyDefaults
 
-local function InitDB()
-    nugsCastBarsDB     = CopyDefaults(nugsCastBarsDB     or {}, NCB.defaults)
-    nugsCastBarsCharDB = CopyDefaults(nugsCastBarsCharDB or {}, NCB.charDefaults)
-
+local function NormaliseBars()
     for _, def in ipairs(NCB.UNITS) do
-        local cfg = nugsCastBarsDB.bars[def.key] or {}
+        local cfg = NCB.db.bars[def.key] or {}
         cfg = CopyDefaults(cfg, BAR_OVERRIDES[def.key] or {})
         cfg = CopyDefaults(cfg, NCB.barDefaults)
-        nugsCastBarsDB.bars[def.key] = cfg
+        NCB.db.bars[def.key] = cfg
     end
+end
 
-    NCB.db   = nugsCastBarsDB
+local function InitDB()
+    -- Settings are per character. See nugsProfile.lua for why nothing is linked.
+    NCB.db = NCB.Profile:Init({
+        global   = "nugsCastBarsDB",
+        defaults = NCB.defaults,
+        onApply  = function()
+            -- A copied-in profile has had the same chance to be missing a bar block
+            -- as one read off disk, so it gets the same top-up before anything draws
+            -- from it.
+            NormaliseBars()
+            if NCB.Bars then NCB.Bars:ApplyAll() end
+            if NCB.RefreshOptions then NCB.RefreshOptions() end
+        end,
+    })
+
+    nugsCastBarsCharDB = CopyDefaults(nugsCastBarsCharDB or {}, NCB.charDefaults)
     NCB.char = nugsCastBarsCharDB
-    nugsCastBarsDB.profiles = nugsCastBarsDB.profiles or {}
+
+    NormaliseBars()
+
+    -- The named-profile store stays ACCOUNT-wide, on purpose.
+    --
+    -- Per-character settings answer "my paladin and my priest differ". Named profiles
+    -- answer "I built a look once and want it on demand" - and a library only one
+    -- character can see would be useless for exactly the thing it exists for. It is
+    -- absent from NCB.defaults, so the migration leaves it at the top level where
+    -- every character reaches it.
+    local account = NCB.Profile.account
+    account.profiles = account.profiles or {}
 end
 
 --------------------------------------------------------------------------------
@@ -589,7 +613,7 @@ NCB.TrimName = ProfileTrim
 
 function NCB.ProfileNames()
     local names = {}
-    for name in pairs(NCB.db.profiles or {}) do names[#names + 1] = name end
+    for name in pairs(NCB.Profile.account.profiles or {}) do names[#names + 1] = name end
     table.sort(names, function(a, b) return a:lower() < b:lower() end)
     return names
 end
@@ -601,18 +625,18 @@ function NCB.SaveProfile(name)
     for k, v in pairs(NCB.db) do
         if not PROFILE_SKIP[k] then snap[k] = ProfileDeepCopy(v) end
     end
-    NCB.db.profiles[name] = snap
-    NCB.db.activeProfile = name
+    NCB.Profile.account.profiles[name] = snap
+    NCB.Profile.account.activeProfile = name
     return true
 end
 
 function NCB.LoadProfile(name)
-    local snap = NCB.db.profiles and NCB.db.profiles[name]
+    local snap = NCB.Profile.account.profiles and NCB.Profile.account.profiles[name]
     if not snap then return false end
     for k, v in pairs(snap) do
         if not PROFILE_SKIP[k] then NCB.db[k] = ProfileDeepCopy(v) end
     end
-    NCB.db.activeProfile = name
+    NCB.Profile.account.activeProfile = name
     if NCB.Bars and NCB.Bars.ApplyAll then NCB.Bars:ApplyAll() end
     if NCB.RefreshOptions then NCB.RefreshOptions() end
     return true
@@ -641,16 +665,16 @@ local function SameSettings(a, b)
 end
 
 function NCB.ProfileStatus()
-    local name = NCB.db.activeProfile
-    local stored = name and NCB.db.profiles and NCB.db.profiles[name]
+    local name = NCB.Profile.account.activeProfile
+    local stored = name and NCB.Profile.account.profiles and NCB.Profile.account.profiles[name]
     if not stored then return nil, false end
     return name, SameSettings(ProfileSnapshot(), stored)
 end
 
 function NCB.DeleteProfile(name)
     name = ProfileTrim(name)
-    if not (NCB.db.profiles and NCB.db.profiles[name]) then return false end
-    NCB.db.profiles[name] = nil
+    if not (NCB.Profile.account.profiles and NCB.Profile.account.profiles[name]) then return false end
+    NCB.Profile.account.profiles[name] = nil
     return true
 end
 
@@ -740,7 +764,11 @@ local function RegisterWithSuite()
             NCB.db.minimapHidden = not shown
             NCB.SetMinimapShown(shown)
         end,
-        GetDB      = function() return nugsCastBarsDB, EffectiveDefaults() end,
+        -- This character's settings, not the account container - that now holds every
+        -- character, and handing it out would put the whole roster into a profile
+        -- string meant to describe one of them.
+        GetDB      = function() return NCB.db, EffectiveDefaults() end,
+        Profile    = NCB.Profile,
         GetCharDB  = function() return nugsCastBarsCharDB, NCB.charDefaults end,
         -- Published so the other nugs addons can offer the same cues. A function
         -- rather than the table itself: this runs before the saved variables exist,
@@ -770,6 +798,7 @@ events:SetScript("OnEvent", function(_, event, arg1)
         RegisterWithSuite()
 
     elseif event == "PLAYER_LOGIN" then
+        NCB.Profile:Attach()
         NCB.InitMinimap()
         NCB.Interrupts:Rebuild()
         NCB.Interrupts:UpdateWatcher()

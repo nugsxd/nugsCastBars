@@ -1,5 +1,115 @@
 # nugsCastBars — changelog
 
+## 0.12.0
+
+- **Runs on WoW Forever.** The addon now declares both 12.1.5 and 1.60.1, so one build
+  works on retail and on Forever.
+
+  Forever turned out to be the modern engine wearing a 1.x version number — 271 `C_`
+  namespaces, secret values, duration objects, all of it. What it does *not* have is
+  the deprecated globals retail still ships as shims, and this addon was already
+  written against the namespaced forms.
+
+
+## 0.11.1
+
+- **Updated for patch 12.1.5.** No behaviour changes — this marks the addon as current
+  so the client stops reporting it out of date.
+
+
+## 0.11.0
+
+- **Every movable window in this addon now uses one shared drag installer.**
+
+  "The window sticks to the cursor" / "the window jumps when I grab the title bar"
+  has been fixed four times across this family and come back every time. Each fix
+  named a *path* by which a move could be left running - hidden mid-drag, a guard
+  thrown away by a later `SetScript`, a click swallowed by a dropdown - closed that
+  one path, and lived in its own handler, leaving every other frame untouched.
+
+  The shared installer names no path. It asserts the thing that is true whatever the
+  path was: **a frame nobody is holding must not be moving**, re-checked every frame.
+  Anything that survives - known or unknown - is over on the next one. Starting a move
+  also stops any previous one first, because `StartMoving` on an already-moving frame
+  re-bases the move onto the cursor, which is exactly what the jump looked like.
+
+- **And it measures.** If a frame ever moves by an amount the cursor did not ask for,
+  it now says so in chat with the numbers - how far, what it was anchored to, whether
+  a move was already running, and what was under the cursor. Silent otherwise.
+
+
+## 0.10.2
+
+- **The fix for "the window sticks to the cursor" had never once run.** It was
+  written as `HookScript("OnHide", ...)` where the title bar is built, and
+  `BuildWindow` calls `SetScript("OnHide", ...)` much further down the same file.
+  `SetScript` replaces the whole handler including anything hooked onto it
+  beforehand, so the guard was discarded at load and the bug it was added for kept
+  happening. The handler that discarded it now runs it first.
+
+- A checker rule was added for this - `HOOKKILL` in `dragcheck.js` - because it is
+  the second time the same mechanism has silently killed a fix. It found this one.
+
+- The same applied to an `OnShow` hook that positioned the window on its first open.
+
+
+## 0.10.1
+
+- **Fixed a drag that could stick to the cursor.** A frame hidden between
+  `StartMoving` and `StopMovingOrSizing` never receives `OnDragStop` - the game does
+  not deliver drag scripts to a hidden frame - so the move stayed live and the frame
+  followed the cursor with no button held. Windows here hide themselves on a pull and
+  when anchors are locked, so being hidden mid-drag was never a corner case.
+
+  Every movable frame now stops moving when hidden. The minimap button drags from an
+  OnUpdate rather than StartMoving and had the same bug by a different route; it drops
+  the handler on hide instead.
+
+  Found in nugsAuras from a real report, then found in every addon in the family by a
+  new `HIDDENMOVE` rule in the drag checker.
+
+## 0.10.0
+
+- **Controls say what they do.** A white triangle pointing down means a list drops
+  down; triangles on both sides mean the button steps through its options. Those were
+  the same rectangle with the same text in it, and the only way to tell them apart was
+  to click one and find out.
+- The marker only ever goes on a control that really behaves that way. One wearing the
+  wrong arrow would be worse than one wearing none, because the marker becomes the
+  thing misleading you.
+
+## 0.9.1
+
+- **A queued cast no longer makes the bar say the real one failed.** Pressing the same
+  spell again while it is casting queues a second attempt, and that attempt fails
+  immediately - carrying the SAME spell id as the cast in progress. The bar matched on
+  spell id alone, so it marked the running cast failed while it carried on perfectly
+  happily. Spell queueing is normal play, so a long cast like Prayer of Healing looked
+  cancelled several times a fight.
+- The bar now asks the client whether the cast is still running before calling it a
+  failure. A real failure has already ended the cast, so the check costs nothing there;
+  a queued one leaves the original running, and that is the case it rejects. Identity
+  is compared by barID - the castGUID the event carries went secret in 12.0 and
+  comparing two secret values throws, which is exactly why barID exists.
+
+## 0.9.0
+
+- **Settings are per character now.** A tweak on one character no longer changes
+  another. Not shared profiles - nothing is linked at all: a character's settings are
+  seeded once, from the starting point or another character, and are its own from then
+  on. Copying is something you do, not something you leave switched on.
+  - On your first login after this, the settings you have become this character's AND
+    the starting point every other character seeds from, so nobody arrives to an empty
+    screen.
+  - Copy between characters from nugsSuite's Characters tab, which drives every nugs
+    addon at once.
+  - Named profiles are unchanged and stay account-wide. They answer a different
+    question - "I built a look once and want it on demand" - and a library only one
+    character could see would be useless for exactly that.
+- Profile strings now carry this character's settings rather than the account table.
+  Left as it was, exporting would have put every character you own into a string meant
+  to describe one of them.
+
 ## 0.8.6
 
 - **Fixed: anchors could be left unlocked during a fight.** Placing mode puts a drag

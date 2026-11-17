@@ -111,6 +111,38 @@ local function SectionHeader(parent, text)
     return fs
 end
 
+-- One white triangle, pointed whichever way is asked for.
+--
+-- Our own art rather than Blizzard's: UI-SortArrow is a whole arrow with a tail, which
+-- is not what a marker on a small button should look like, and stock texture paths are
+-- the thing that gets renamed between expansions.
+--
+-- Rotated by texture coordinates rather than shipping four files. The eight-argument
+-- form of SetTexCoord rotates the quad; the four-argument form can only flip it, which
+-- is why left and right cannot be done by mirroring an up arrow.
+--
+-- The two horizontal entries look backwards and are not: rotating the COORDINATES
+-- clockwise rotates the drawn IMAGE counter-clockwise. Trace the apex rather than
+-- reasoning about the rotation - the reasoning is what got them swapped the first time.
+local ARROW_TEX = "Interface\\AddOns\\nugsCastBars\\arrow"
+local ARROW_COORDS = {
+    up    = { 0, 0, 0, 1, 1, 0, 1, 1 },
+    down  = { 1, 1, 1, 0, 0, 1, 0, 0 },
+    left  = { 1, 0, 0, 0, 1, 1, 0, 1 },
+    right = { 0, 1, 1, 1, 0, 0, 1, 0 },
+}
+
+local function Arrow(owner, facing, point, x)
+    local a = owner:CreateTexture(nil, "OVERLAY")
+    a:SetTexture(ARROW_TEX)
+    a:SetTexCoord(unpack(ARROW_COORDS[facing]))
+    a:SetVertexColor(1, 1, 1)
+    a:SetSize(8, 8)
+    a:SetPoint(point, x, 0)
+    a:SetAlpha(0.8)
+    return a
+end
+
 local function Button(parent, text, w, h, onClick)
     local b = CreateFrame("Button", nil, parent)
     b:SetSize(w, h)
@@ -132,6 +164,40 @@ local function Button(parent, text, w, h, onClick)
         self.text:SetTextColor(unpack(grey and C.faint or C.text))
         if grey then self:Disable() else self:Enable() end
     end
+
+    -- Marks this button as one that CYCLES: an arrow each side, because the next value
+    -- is one click away and there is no list to open.
+    --
+    -- The pair is the point. A dropdown and a cycler are the same rectangle with the
+    -- same text in it, and the only way to know which you were looking at was to click
+    -- it. One chevron down means "a list appears"; arrows both sides mean "this steps".
+    --
+    -- Only ever put on a control that really behaves that way - one wearing the wrong
+    -- marker is worse than one wearing none, because the marker becomes the thing
+    -- misleading you.
+    b.MarkAsCycle = function(self)
+        if self.leftArrow then return self end
+        self.leftArrow  = Arrow(self, "left",  "LEFT",   5)
+        self.rightArrow = Arrow(self, "right", "RIGHT", -5)
+        if self.text then
+            self.text:ClearAllPoints()
+            self.text:SetPoint("LEFT", 16, 0)
+            self.text:SetPoint("RIGHT", -16, 0)
+        end
+        return self
+    end
+
+    b.MarkAsDropdown = function(self)
+        if self.arrow then return self end
+        self.arrow = Arrow(self, "down", "RIGHT", -6)
+        if self.text then
+            self.text:ClearAllPoints()
+            self.text:SetPoint("LEFT", 6, 0)
+            self.text:SetPoint("RIGHT", -18, 0)
+            self.text:SetJustifyH("LEFT")
+        end
+        return self
+    end
     return b
 end
 
@@ -147,8 +213,12 @@ local function HeaderBar(f, titleText, tailText)
     header:SetHeight(30)
     header:EnableMouse(true)
     header:RegisterForDrag("LeftButton")
-    header:SetScript("OnDragStart", function() f:StartMoving() end)
-    header:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
+
+    -- Dragging, and the guarantee that a move ends: from the shared nugsMove.lua,
+    -- which asserts that a frame nobody is holding is not moving rather than closing
+    -- one more route by which a move could be left running. Read the note at the top
+    -- of that file before changing anything here.
+    NCB.InstallMove(f, { label = "the settings window", handle = header, body = true })
 
     local accent = header:CreateTexture(nil, "OVERLAY")
     accent:SetPoint("BOTTOMLEFT", 0, 0)
@@ -364,6 +434,7 @@ local function Choice(parent, prefix, options, getter, setter)
         NCB.Bars:ApplyAll()
         NCB.RefreshOptions()
     end)
+    btn:MarkAsCycle()
     btn:SetPoint("LEFT", 0, 0)
     btn:SetPoint("RIGHT", 0, 0)
 
@@ -1261,6 +1332,7 @@ local function MediaButton(parent, kind, prefix, getter, setter)
             NCB.RefreshOptions()
         end)
     end)
+    btn:MarkAsDropdown()
     btn:SetPoint("LEFT", 0, 0)
     btn:SetPoint("RIGHT", 0, 0)
 
@@ -1715,7 +1787,7 @@ local function BuildGeneralPanel(content)
     local pSave = Button(profileRow, "Save", 66, 22, function()
         local name = CurrentName()
         if name == "" then NCB.Print("give the profile a name first.") return end
-        local existed = NCB.db.profiles[name] ~= nil
+        local existed = NCB.Profile.account.profiles[name] ~= nil
         if NCB.SaveProfile(name) then
             NCB.Print((existed and "profile updated: " or "profile saved: ") .. name)
             NCB.RefreshOptions()
@@ -1912,9 +1984,6 @@ local function BuildWindow()
     f:SetMovable(true)
     f:EnableMouse(true)
     f:SetClampedToScreen(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
 
     -- See the note above about the CENTER anchor: convert it to explicit, pixel
     -- aligned coordinates the first time the window is shown, so the first drag has
@@ -2007,8 +2076,16 @@ local function BuildWindow()
 
     f.bottomButtons = { reset = resetBtn, copy = copyBtn }
 
-    f:SetScript("OnShow", function() NCB.RefreshOptions() end)
-    f:SetScript("OnHide", function()
+    -- HookScript, NOT SetScript: this window already has an OnShow handler set
+    -- further up (the guard that stops a drag left running when the window is
+    -- hidden mid-move). SetScript would throw it away silently. Checked by
+    -- dragcheck.js HOOKKILL.
+    f:HookScript("OnShow", function() NCB.RefreshOptions() end)
+    -- HookScript, NOT SetScript: this window already has an OnHide handler set
+    -- further up (the guard that stops a drag left running when the window is
+    -- hidden mid-move). SetScript would throw it away silently. Checked by
+    -- dragcheck.js HOOKKILL.
+    f:HookScript("OnHide", function()
         if mediaPopup then mediaPopup:Hide() end
     end)
 
@@ -2083,9 +2160,11 @@ local function BuildMoveBar()
     f:SetClampedToScreen(true)
     f:SetMovable(true)
     f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    -- Dragging, from the shared nugsMove.lua. This bar is the likeliest frame in
+    -- the addon to be hidden mid-move: the settings window hides it the instant it
+    -- opens, and a frame hidden between StartMoving and StopMovingOrSizing is never
+    -- given OnDragStop.
+    NCB.InstallMove(f, { label = "the move bar" })
     Backdrop(f, C.bg, 1)
 
     -- Storm-blue edge, so a floating bar reads as sitting on top of the world rather

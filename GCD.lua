@@ -180,22 +180,32 @@ local function Build()
     f.dragLabel:SetText("Global cooldown |cff888888(drag)|r")
     f.dragLabel:Hide()
 
-    f:SetScript("OnDragStart", function(self)
-        if NCB.db.locked then return end
-        self:StartMoving()
-    end)
-    f:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        SavePosition(self)
-        if NCB.RefreshOptions then NCB.RefreshOptions() end
-    end)
-
     f:SetScript("OnUpdate", function(self, elapsed)
         self.accum = (self.accum or 0) + elapsed
         if self.accum < POLL then return end
         self.accum = 0
         GCD:Tick()
     end)
+
+    -- Dragging, from the shared nugsMove.lua. Read the note at the top of that file:
+    -- it asserts that a frame nobody is holding is not moving, rather than closing one
+    -- more route by which a move could be left running.
+    --
+    -- AFTER the OnUpdate above, deliberately. The installer chains whatever handler is
+    -- already there, so this order keeps the metronome ticking AND gets the invariant;
+    -- the other order would have the line above silently replace it.
+    NCB.InstallMove(f, {
+        label = "the GCD bar",
+        -- The mouse belongs to the lock state, not to this call.
+        mouse   = false,
+        canMove = function() return not NCB.db.locked end,
+        -- Runs however the move ended, including when the invariant ended it because
+        -- the mouse-up never arrived.
+        onEnd   = function(self)
+            SavePosition(self)
+            if NCB.RefreshOptions then NCB.RefreshOptions() end
+        end,
+    })
 
     frame = f
 end
